@@ -1,0 +1,204 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidShareCode(code) {
+      return code is string && code.size() >= 6 && code.size() <= 16 && code.matches('^[A-Z0-9\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email == 'kamleshkumarsingh317@gmail.com' &&
+         request.auth.token.email_verified == true)
+      );
+    }
+
+    function isBoundedStringList(arr, maxLen) {
+      return arr is list &&
+             arr.size() <= maxLen &&
+             (arr.size() == 0 || arr[0] is string);
+    }
+
+    // --- Validation Helpers ---
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('clubName' in data) || (data.clubName is string && data.clubName.size() <= 80)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidLiveMatch(data) {
+      return data.adminId is string && data.adminId.size() >= 1 && data.adminId.size() <= 128 &&
+             data.adminName is string && data.adminName.size() >= 1 && data.adminName.size() <= 80 &&
+             data.localMatchId is int && data.localMatchId >= 0 &&
+             data.hostTeam is string && data.hostTeam.size() >= 1 && data.hostTeam.size() <= 60 &&
+             data.visitorTeam is string && data.visitorTeam.size() >= 1 && data.visitorTeam.size() <= 60 &&
+             data.tossSummary is string && data.tossSummary.size() <= 140 &&
+             data.matchStatus is string && data.matchStatus in ['LIVE', 'INNINGS_BREAK', 'COMPLETED'] &&
+             data.sharingEnabled is bool &&
+             data.totalOvers is int && data.totalOvers >= 1 && data.totalOvers <= 99 &&
+             data.currentInningsNumber is int && data.currentInningsNumber >= 1 && data.currentInningsNumber <= 2 &&
+             data.battingTeam is string && data.battingTeam.size() >= 1 && data.battingTeam.size() <= 60 &&
+             data.bowlingTeam is string && data.bowlingTeam.size() >= 1 && data.bowlingTeam.size() <= 60 &&
+             data.scoreRuns is int && data.scoreRuns >= 0 && data.scoreRuns <= 5000 &&
+             data.scoreWickets is int && data.scoreWickets >= 0 && data.scoreWickets <= 20 &&
+             data.oversDisplay is string && data.oversDisplay.size() >= 1 && data.oversDisplay.size() <= 16 &&
+             data.crr is string && data.crr.size() >= 1 && data.crr.size() <= 16 &&
+             data.rrr is string && data.rrr.size() <= 16 &&
+             data.targetRuns is int && data.targetRuns >= 0 && data.targetRuns <= 5000 &&
+             data.chaseSummary is string && data.chaseSummary.size() <= 160 &&
+             data.resultSummary is string && data.resultSummary.size() <= 180 &&
+             data.strikerName is string && data.strikerName.size() <= 60 &&
+             data.strikerStats is string && data.strikerStats.size() <= 80 &&
+             data.nonStrikerName is string && data.nonStrikerName.size() <= 60 &&
+             data.nonStrikerStats is string && data.nonStrikerStats.size() <= 80 &&
+             data.bowlerName is string && data.bowlerName.size() <= 60 &&
+             data.bowlerStats is string && data.bowlerStats.size() <= 80 &&
+             data.partnershipSummary is string && data.partnershipSummary.size() <= 80 &&
+             data.lastWicketSummary is string && data.lastWicketSummary.size() <= 100 &&
+             data.lastBallBadge is string && data.lastBallBadge.size() <= 24 &&
+             data.lastShotZone is string && data.lastShotZone.size() <= 40 &&
+             isBoundedStringList(data.currentOverBalls, 24) &&
+             isBoundedStringList(data.recentBalls, 24) &&
+             data.innings1Summary is string && data.innings1Summary.size() <= 140 &&
+             data.innings2Summary is string && data.innings2Summary.size() <= 140 &&
+             isBoundedStringList(data.battingCardLines, 20) &&
+             isBoundedStringList(data.bowlingCardLines, 20) &&
+             data.ballSequence is int && data.ballSequence >= 0 && data.ballSequence <= 100000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // --- Collection 1: Private Admin / User Profiles (Strict PII Isolation) ---
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'clubName', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'clubName', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // --- Collection 2: Real-Time Shared Live Matches ---
+    match /live_matches/{shareCode} {
+      // Spectators (even without logging in) can read any live match with sharingEnabled == true;
+      // missing codes (resource == null) cleanly return not-found; match admin or super-admin can always read.
+      allow get: if isValidShareCode(shareCode) && (
+                    resource == null ||
+                    resource.data.sharingEnabled == true ||
+                    (isSignedIn() && (resource.data.adminId == request.auth.uid || isAdmin()))
+                  );
+
+      // Spectators without login can list active shared matches (where sharingEnabled == true);
+      // signed-in Admins can also list all of their own broadcasts (including paused ones).
+      allow list: if resource.data.sharingEnabled == true ||
+                     (isSignedIn() && (resource.data.adminId == request.auth.uid || isAdmin()));
+
+      allow create: if isSignedIn() &&
+                       isValidShareCode(shareCode) &&
+                       incoming().adminId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'adminId', 'adminName', 'localMatchId', 'hostTeam', 'visitorTeam',
+                         'tossSummary', 'matchStatus', 'sharingEnabled', 'totalOvers',
+                         'currentInningsNumber', 'battingTeam', 'bowlingTeam', 'scoreRuns',
+                         'scoreWickets', 'oversDisplay', 'crr', 'rrr', 'targetRuns',
+                         'chaseSummary', 'resultSummary', 'strikerName', 'strikerStats',
+                         'nonStrikerName', 'nonStrikerStats', 'bowlerName', 'bowlerStats',
+                         'partnershipSummary', 'lastWicketSummary', 'lastBallBadge',
+                         'lastShotZone', 'currentOverBalls', 'recentBalls', 'innings1Summary',
+                         'innings2Summary', 'battingCardLines', 'bowlingCardLines',
+                         'ballSequence', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'adminId', 'adminName', 'localMatchId', 'hostTeam', 'visitorTeam',
+                         'tossSummary', 'matchStatus', 'sharingEnabled', 'totalOvers',
+                         'currentInningsNumber', 'battingTeam', 'bowlingTeam', 'scoreRuns',
+                         'scoreWickets', 'oversDisplay', 'crr', 'rrr', 'targetRuns',
+                         'chaseSummary', 'resultSummary', 'strikerName', 'strikerStats',
+                         'nonStrikerName', 'nonStrikerStats', 'bowlerName', 'bowlerStats',
+                         'partnershipSummary', 'lastWicketSummary', 'lastBallBadge',
+                         'lastShotZone', 'currentOverBalls', 'recentBalls', 'innings1Summary',
+                         'innings2Summary', 'battingCardLines', 'bowlingCardLines',
+                         'ballSequence', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidLiveMatch(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidShareCode(shareCode) &&
+                       isValidLiveMatch(incoming()) &&
+                       incoming().adminId == existing().adminId &&
+                       incoming().localMatchId == existing().localMatchId &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Super-admin override (terminal state correction)
+                         isAdmin() ||
+                         // Action 1: Match admin updates live ball-by-ball scoreboard while not locked COMPLETED
+                         (existing().adminId == request.auth.uid &&
+                          existing().matchStatus != 'COMPLETED' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'adminName', 'hostTeam', 'visitorTeam', 'tossSummary',
+                            'matchStatus', 'sharingEnabled', 'totalOvers',
+                            'currentInningsNumber', 'battingTeam', 'bowlingTeam',
+                            'scoreRuns', 'scoreWickets', 'oversDisplay', 'crr', 'rrr',
+                            'targetRuns', 'chaseSummary', 'resultSummary',
+                            'strikerName', 'strikerStats', 'nonStrikerName',
+                            'nonStrikerStats', 'bowlerName', 'bowlerStats',
+                            'partnershipSummary', 'lastWicketSummary', 'lastBallBadge',
+                            'lastShotZone', 'currentOverBalls', 'recentBalls',
+                            'innings1Summary', 'innings2Summary', 'battingCardLines',
+                            'bowlingCardLines', 'ballSequence', 'updatedAt'
+                          ])) ||
+                         // Action 2: Match admin toggles sharingEnabled even after match completion
+                         (existing().adminId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['sharingEnabled', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidShareCode(shareCode) &&
+                       (existing().adminId == request.auth.uid || isAdmin());
+    }
+
+    // --- Collection 3: Server-managed Admin Registry ---
+    match /admins/{adminUid} {
+      allow read, write: if false;
+    }
+  }
+}

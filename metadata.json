@@ -1,0 +1,6 @@
+{
+  "name": "Cricscore",
+  "description": "Offline ball-by-ball cricket scoring app with full scorecards, over-by-over stats, graphs, team management, and match history — no login required.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,272 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private Admin and Spectator profile stored per authenticated Google user.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name shown on live match broadcasts."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Authenticated user email (private to owner)."
+        },
+        "clubName": {
+          "type": "string",
+          "description": "Optional cricket club or academy name."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "displayName", "createdAt", "updatedAt"]
+    },
+    "LiveMatch": {
+      "title": "LiveMatch",
+      "description": "Low-latency denormalized live cricket scoreboard synced ball-by-ball by the match admin and observed in real time by spectators via shareCode.",
+      "type": "object",
+      "properties": {
+        "adminId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the match admin scorer."
+        },
+        "adminName": {
+          "type": "string",
+          "description": "Public scorer display name (non-PII)."
+        },
+        "localMatchId": {
+          "type": "integer",
+          "description": "Local Room match ID on the admin device."
+        },
+        "hostTeam": {
+          "type": "string",
+          "description": "Host team name."
+        },
+        "visitorTeam": {
+          "type": "string",
+          "description": "Visitor team name."
+        },
+        "tossSummary": {
+          "type": "string",
+          "description": "Toss winner and decision summary."
+        },
+        "matchStatus": {
+          "type": "string",
+          "enum": ["LIVE", "INNINGS_BREAK", "COMPLETED"],
+          "description": "Current lifecycle status of the live broadcast."
+        },
+        "sharingEnabled": {
+          "type": "boolean",
+          "description": "Whether spectators with the shareCode can view live updates."
+        },
+        "totalOvers": {
+          "type": "integer",
+          "description": "Configured overs per innings."
+        },
+        "currentInningsNumber": {
+          "type": "integer",
+          "description": "1 or 2."
+        },
+        "battingTeam": {
+          "type": "string",
+          "description": "Currently batting team."
+        },
+        "bowlingTeam": {
+          "type": "string",
+          "description": "Currently bowling team."
+        },
+        "scoreRuns": {
+          "type": "integer",
+          "description": "Current innings total runs."
+        },
+        "scoreWickets": {
+          "type": "integer",
+          "description": "Current innings wickets fallen."
+        },
+        "oversDisplay": {
+          "type": "string",
+          "description": "Overs bowled formatted like 4.2."
+        },
+        "crr": {
+          "type": "string",
+          "description": "Current run rate formatted like 8.45."
+        },
+        "rrr": {
+          "type": "string",
+          "description": "Required run rate formatted like 9.20 or empty in 1st innings."
+        },
+        "targetRuns": {
+          "type": "integer",
+          "description": "Target runs in 2nd innings, or 0 in 1st innings."
+        },
+        "chaseSummary": {
+          "type": "string",
+          "description": "Live chase or match banner text."
+        },
+        "resultSummary": {
+          "type": "string",
+          "description": "Completed match result summary."
+        },
+        "strikerName": {
+          "type": "string",
+          "description": "Current striker batter name."
+        },
+        "strikerStats": {
+          "type": "string",
+          "description": "Compact striker stats line."
+        },
+        "nonStrikerName": {
+          "type": "string",
+          "description": "Current non-striker batter name."
+        },
+        "nonStrikerStats": {
+          "type": "string",
+          "description": "Compact non-striker stats line."
+        },
+        "bowlerName": {
+          "type": "string",
+          "description": "Current bowler name."
+        },
+        "bowlerStats": {
+          "type": "string",
+          "description": "Compact bowler figures line."
+        },
+        "partnershipSummary": {
+          "type": "string",
+          "description": "Current partnership runs and balls."
+        },
+        "lastWicketSummary": {
+          "type": "string",
+          "description": "Most recent wicket fall summary."
+        },
+        "lastBallBadge": {
+          "type": "string",
+          "description": "Badge text for latest delivery (0, 1, 4, 6, W, WD)."
+        },
+        "lastShotZone": {
+          "type": "string",
+          "description": "Fielding zone of the latest scored shot."
+        },
+        "currentOverBalls": {
+          "type": "array",
+          "description": "Labels for deliveries in the current over."
+        },
+        "recentBalls": {
+          "type": "array",
+          "description": "Recent ball-by-ball commentary lines."
+        },
+        "innings1Summary": {
+          "type": "string",
+          "description": "Compact summary of 1st innings."
+        },
+        "innings2Summary": {
+          "type": "string",
+          "description": "Compact summary of 2nd innings."
+        },
+        "battingCardLines": {
+          "type": "array",
+          "description": "Compact batting scorecard lines for current innings."
+        },
+        "bowlingCardLines": {
+          "type": "array",
+          "description": "Compact bowling scorecard lines for current innings."
+        },
+        "ballSequence": {
+          "type": "integer",
+          "description": "Monotonically increasing sequence counter for instant spectator animation."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Broadcast creation timestamp via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Latest ball update timestamp via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "adminId",
+        "adminName",
+        "localMatchId",
+        "hostTeam",
+        "visitorTeam",
+        "tossSummary",
+        "matchStatus",
+        "sharingEnabled",
+        "totalOvers",
+        "currentInningsNumber",
+        "battingTeam",
+        "bowlingTeam",
+        "scoreRuns",
+        "scoreWickets",
+        "oversDisplay",
+        "crr",
+        "rrr",
+        "targetRuns",
+        "chaseSummary",
+        "resultSummary",
+        "strikerName",
+        "strikerStats",
+        "nonStrikerName",
+        "nonStrikerStats",
+        "bowlerName",
+        "bowlerStats",
+        "partnershipSummary",
+        "lastWicketSummary",
+        "lastBallBadge",
+        "lastShotZone",
+        "currentOverBalls",
+        "recentBalls",
+        "innings1Summary",
+        "innings2Summary",
+        "battingCardLines",
+        "bowlingCardLines",
+        "ballSequence",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Server-managed super-admin membership marker (no client writes).",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the UID is a super-admin."
+        }
+      },
+      "required": ["enabled"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private profile document per authenticated Cricscore user."
+    },
+    "/live_matches/{shareCode}": {
+      "schema": { "$ref": "#/entities/LiveMatch" },
+      "description": "Real-time shared live scoreboard documents keyed by shareCode."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Server-managed admin registry checked by security rules."
+    }
+  }
+}
