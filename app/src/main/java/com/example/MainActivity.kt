@@ -220,10 +220,9 @@ private fun CricscoreSplashScreen() {
 
             Text(
                 text = "Cricscore",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1.sp
-                ),
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = 1.sp,
                 color = MaterialTheme.colorScheme.onBackground
             )
 
@@ -245,8 +244,12 @@ private fun CricscoreSplashScreen() {
         ) {
             Text(
                 text = "Made by Chandu Pritam",
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.6.sp
-                ),
-                
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.6.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
