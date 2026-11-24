@@ -13,6 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore clean MainActivity from commit da2d1b2
+        run: |
+          git checkout da2d1b2 -- app/src/main/java/com/example/MainActivity.kt
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -36,25 +42,138 @@ jobs:
           </resources>
           EOF
 
-      - name: Inject In-App AutoUpdateChecker automatically
+      - name: Add Splash Screen & AutoUpdateChecker safely
         run: |
-          MAIN_FILE="app/src/main/java/com/example/MainActivity.kt"
-          cat << 'EOF' > app/src/main/java/com/example/UpdateChecker.kt
+          cat << 'EOF' > app/src/main/java/com/example/SplashAndUpdate.kt
           package com.example
 
           import android.content.Intent
           import android.net.Uri
-          import androidx.compose.material3.AlertDialog
-          import androidx.compose.material3.Button
-          import androidx.compose.material3.Text
-          import androidx.compose.material3.TextButton
+          import androidx.compose.animation.AnimatedVisibility
+          import androidx.compose.animation.core.FastOutSlowInEasing
+          import androidx.compose.animation.core.animateFloatAsState
+          import androidx.compose.animation.core.tween
+          import androidx.compose.animation.fadeIn
+          import androidx.compose.animation.fadeOut
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.filled.SportsCricket
+          import androidx.compose.material3.*
           import androidx.compose.runtime.*
+          import androidx.compose.runtime.saveable.rememberSaveable
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.alpha
+          import androidx.compose.ui.draw.scale
+          import androidx.compose.ui.graphics.Brush
           import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
           import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.delay
           import kotlinx.coroutines.withContext
           import org.json.JSONObject
           import java.net.HttpURLConnection
           import java.net.URL
+
+          @Composable
+          fun SplashAndUpdateHost(content: @Composable () -> Unit) {
+              var showSplash by rememberSaveable { mutableStateOf(true) }
+              var startAnim by remember { mutableStateOf(false) }
+
+              LaunchedEffect(Unit) {
+                  startAnim = true
+                  if (showSplash) {
+                      delay(3000L)
+                      showSplash = false
+                  }
+              }
+
+              val scale by animateFloatAsState(
+                  targetValue = if (startAnim) 1f else 0.7f,
+                  animationSpec = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+                  label = "scale"
+              )
+              val alpha by animateFloatAsState(
+                  targetValue = if (startAnim) 1f else 0f,
+                  animationSpec = tween(durationMillis = 900),
+                  label = "alpha"
+              )
+
+              Box(modifier = Modifier.fillMaxSize()) {
+                  if (!showSplash) {
+                      AutoUpdateChecker()
+                      content()
+                  }
+
+                  AnimatedVisibility(
+                      visible = showSplash,
+                      enter = fadeIn(tween(400)),
+                      exit = fadeOut(tween(600))
+                  ) {
+                      Box(
+                          modifier = Modifier
+                              .fillMaxSize()
+                              .background(
+                                  Brush.verticalGradient(
+                                      listOf(
+                                          MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                                          MaterialTheme.colorScheme.background,
+                                          MaterialTheme.colorScheme.background
+                                      )
+                                  )
+                              ),
+                          contentAlignment = Alignment.Center
+                      ) {
+                          Column(
+                              horizontalAlignment = Alignment.CenterHorizontally,
+                              modifier = Modifier.scale(scale).alpha(alpha)
+                          ) {
+                              Surface(
+                                  shape = CircleShape,
+                                  color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                  modifier = Modifier.size(116.dp)
+                              ) {
+                                  Box(contentAlignment = Alignment.Center) {
+                                      Icon(
+                                          imageVector = Icons.Filled.SportsCricket,
+                                          contentDescription = "Logo",
+                                          tint = MaterialTheme.colorScheme.primary,
+                                          modifier = Modifier.size(64.dp)
+                                      )
+                                  }
+                              }
+                              Spacer(modifier = Modifier.height(20.dp))
+                              Text(
+                                  text = "Cricscore",
+                                  style = MaterialTheme.typography.headlineLarge,
+                                  fontWeight = FontWeight.ExtraBold,
+                                  letterSpacing = 1.sp
+                              )
+                              Spacer(modifier = Modifier.height(6.dp))
+                              Text(
+                                  text = "Live Cricket Scoring & Broadcast",
+                                  style = MaterialTheme.typography.bodyMedium,
+                                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                              )
+                          }
+                          Text(
+                              text = "Made by Chandu Pritam",
+                              style = MaterialTheme.typography.titleMedium,
+                              fontWeight = FontWeight.Bold,
+                              color = MaterialTheme.colorScheme.primary,
+                              modifier = Modifier
+                                  .align(Alignment.BottomCenter)
+                                  .padding(bottom = 48.dp)
+                                  .alpha(alpha)
+                          )
+                      }
+                  }
+              }
+          }
 
           @Composable
           fun AutoUpdateChecker() {
@@ -102,44 +221,4 @@ jobs:
               if (showDialog && latestVersion != null && downloadUrl != null) {
                   AlertDialog(
                       onDismissRequest = { showDialog = false },
-                      title = { Text("नया अपडेट उपलब्ध है! 🚀") },
-                      text = { Text("ऐप का नया वर्ज़न ($latestVersion) आ गया है। नए फीचर्स पाने के लिए अभी अपडेट करें।") },
-                      confirmButton = {
-                          Button(onClick = {
-                              showDialog = false
-                              context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)))
-                          }) { Text("Update Now") }
-                      },
-                      dismissButton = {
-                          TextButton(onClick = { showDialog = false }) { Text("बाद में") }
-                      }
-                  )
-              }
-          }
-          EOF
-
-          if ! grep -q "AutoUpdateChecker()" "$MAIN_FILE"; then
-              sed -i 's/CricscoreTheme(themeMode = preferences.themeMode) {/CricscoreTheme(themeMode = preferences.themeMode) {\n                AutoUpdateChecker()/' "$MAIN_FILE"
-          fi
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
-
-      - name: Set App Version & Build APK
-        run: |
-          sed -i 's/versionName = ".*"/versionName = "v1.0.${{ github.run_number }}"/' app/build.gradle.kts
-          sed -i 's/versionCode = [0-9]*/versionCode = ${{ github.run_number }}/' app/build.gradle.kts
-          gradle assembleDebug
-
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Cricscore.apk
-
-      - name: Auto Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Cricscore v1.0.${{ github.run_number }}
-          files: Cricscore.apk
-          
+                      
