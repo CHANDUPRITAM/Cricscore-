@@ -11,4 +11,6 @@
     <string name="action_swap_strike">Swap</string>
     <string name="action_retire">Retire</string>
     <string name="footer_made_by">made by CHANDU PRITAM</string>
+    <string name="splash_tagline">Live Cricket Scoring &amp; Broadcast</string>
+    <string name="splash_made_by">Made by Chandu Pritam</string>
 </resources>
