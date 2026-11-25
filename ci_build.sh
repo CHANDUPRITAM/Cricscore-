@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-git checkout da2d1b2 -- app/src/main/java/com/example/MainActivity.kt
 rm -f app/src/main/java/com/example/UpdateChecker.kt app/src/main/java/com/example/SplashScreen.kt
 
 if [ ! -f debug.keystore ]; then
