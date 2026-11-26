@@ -593,6 +593,36 @@ test("Admin can save/read/delete teams with name, photo, and squad players; cros
   );
 });
 
+// --- 11. APP CONFIG VERSION INFO (PUBLIC READ, LOCKED WRITE) ---
+
+test("Anyone (logged out or signed in) can read app_config/version_info, while all client writes are blocked", async () => {
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_A_UID, { email: "admin_a@example.com", email_verified: true }).firestore();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("app_config").doc("version_info").set({
+      latestVersion: "1.1",
+      downloadUrl: "https://example.com/cricscore-v1.1.apk",
+    });
+  });
+
+  await assertSucceeds(unauthDb.collection("app_config").doc("version_info").get());
+  await assertSucceeds(adminDb.collection("app_config").doc("version_info").get());
+
+  await assertFails(
+    unauthDb.collection("app_config").doc("version_info").set({
+      latestVersion: "9.9",
+      downloadUrl: "https://evil.example/apk",
+    })
+  );
+  await assertFails(
+    adminDb.collection("app_config").doc("version_info").update({
+      latestVersion: "9.9",
+    })
+  );
+  await assertFails(adminDb.collection("app_config").doc("version_info").delete());
+});
+
 
 
 

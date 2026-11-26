@@ -437,6 +437,22 @@
         }
       },
       "required": ["enabled"]
+    },
+    "AppVersionInfo": {
+      "title": "AppVersionInfo",
+      "description": "Remote app update configuration read in real-time from app_config/version_info.",
+      "type": "object",
+      "properties": {
+        "latestVersion": {
+          "type": "string",
+          "description": "Latest published versionName to compare against packageInfo.versionName."
+        },
+        "downloadUrl": {
+          "type": "string",
+          "description": "HTTPS download URL opened in browser when user taps Update Now."
+        }
+      },
+      "required": ["latestVersion", "downloadUrl"]
     }
   },
   "firestore": {
@@ -463,6 +479,10 @@
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminRecord" },
       "description": "Server-managed admin registry checked by security rules."
+    },
+    "/app_config/{docId}": {
+      "schema": { "$ref": "#/entities/AppVersionInfo" },
+      "description": "Public read-only app configuration documents including version_info."
     }
   }
 }

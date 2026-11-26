@@ -1,7 +1,12 @@
 package com.example
 
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -48,10 +53,13 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.SportsCricket
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Leaderboard
 import androidx.compose.material.icons.outlined.SportsCricket
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,6 +74,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -133,6 +142,7 @@ import com.example.viewmodel.LiveMatchViewModel
 import com.example.viewmodel.LiveSpectatorViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -147,6 +157,11 @@ private data class HomeTabItem(
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector,
     val tag: String
+)
+
+private data class InAppUpdateInfo(
+    val latestVersion: String,
+    val downloadUrl: String
 )
 
 class MainActivity : ComponentActivity() {
@@ -194,9 +209,133 @@ class MainActivity : ComponentActivity() {
                     ) {
                         CricscoreSplashScreen()
                     }
+
+                    InAppUpdateChecker(visibleAfterSplash = !showSplash)
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun InAppUpdateChecker(visibleAfterSplash: Boolean) {
+    val context = LocalContext.current
+    val currentVersionName = remember(context) {
+        runCatching {
+            val pm = context.packageManager
+            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(context.packageName, 0)
+            }
+            packageInfo.versionName?.trim().orEmpty()
+        }.getOrDefault(BuildConfig.VERSION_NAME)
+    }
+
+    val firestore = remember(context) {
+        runCatching {
+            FirebaseFirestore.getInstance(
+                context.applicationContext.getString(R.string.firestore_database_id)
+            )
+        }.getOrNull()
+    }
+
+    var pendingUpdate by remember { mutableStateOf<InAppUpdateInfo?>(null) }
+    var dismissedVersion by rememberSaveable { mutableStateOf<String?>(null) }
+
+    DisposableEffect(firestore, currentVersionName) {
+        if (firestore == null) {
+            return@DisposableEffect onDispose {}
+        }
+        val registration = firestore
+            .collection("app_config")
+            .document("version_info")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("InAppUpdateChecker", "Failed to listen app_config/version_info", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val latestVersion = snapshot.getString("latestVersion")?.trim().orEmpty()
+                    val downloadUrl = snapshot.getString("downloadUrl")?.trim().orEmpty()
+                    if (latestVersion.isNotEmpty() && latestVersion != currentVersionName) {
+                        pendingUpdate = InAppUpdateInfo(
+                            latestVersion = latestVersion,
+                            downloadUrl = downloadUrl
+                        )
+                    } else {
+                        pendingUpdate = null
+                    }
+                } else {
+                    pendingUpdate = null
+                }
+            }
+        onDispose { registration.remove() }
+    }
+
+    val updateInfo = pendingUpdate
+    if (visibleAfterSplash && updateInfo != null && dismissedVersion != updateInfo.latestVersion) {
+        val invalidUrlMessage = stringResource(id = R.string.update_dialog_invalid_url)
+        AlertDialog(
+            onDismissRequest = { dismissedVersion = updateInfo.latestVersion },
+            modifier = Modifier.testTag("in_app_update_dialog"),
+            icon = {
+                Icon(
+                    imageVector = Icons.Filled.SystemUpdate,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = {
+                Text(
+                    text = stringResource(id = R.string.update_dialog_title),
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = stringResource(
+                        id = R.string.update_dialog_message,
+                        updateInfo.latestVersion
+                    ),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val rawUrl = updateInfo.downloadUrl
+                        val isHttpUrl = rawUrl.startsWith("https://", ignoreCase = true) ||
+                            rawUrl.startsWith("http://", ignoreCase = true)
+                        val parsedUri = if (isHttpUrl) runCatching { Uri.parse(rawUrl) }.getOrNull() else null
+                        if (parsedUri != null && !parsedUri.host.isNullOrBlank()) {
+                            runCatching {
+                                val intent = Intent(Intent.ACTION_VIEW, parsedUri).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            }.onFailure {
+                                Toast.makeText(context, invalidUrlMessage, Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            Toast.makeText(context, invalidUrlMessage, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.testTag("in_app_update_now_btn")
+                ) {
+                    Text(text = stringResource(id = R.string.update_dialog_positive))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { dismissedVersion = updateInfo.latestVersion },
+                    modifier = Modifier.testTag("in_app_update_later_btn")
+                ) {
+                    Text(text = stringResource(id = R.string.update_dialog_negative))
+                }
+            }
+        )
     }
 }
 

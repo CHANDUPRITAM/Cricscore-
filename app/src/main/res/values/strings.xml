@@ -13,4 +13,9 @@
     <string name="footer_made_by">made by CHANDU PRITAM</string>
     <string name="splash_tagline">Live Cricket Scoring &amp; Broadcast</string>
     <string name="splash_made_by">Made by Chandu Pritam</string>
+    <string name="update_dialog_title">नया अपडेट उपलब्ध है! 🚀</string>
+    <string name="update_dialog_message">ऐप का नया वर्ज़न (%1$s) आ गया है। नए फीचर्स पाने के लिए अभी अपडेट करें।</string>
+    <string name="update_dialog_positive">Update Now</string>
+    <string name="update_dialog_negative">बाद में</string>
+    <string name="update_dialog_invalid_url">अपडेट लिंक अभी उपलब्ध नहीं है।</string>
 </resources>
