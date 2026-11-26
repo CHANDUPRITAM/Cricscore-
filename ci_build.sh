@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Restore exact working source code from commit dc1aa77 (Build #21)
+git checkout dc1aa77 -- app/src
+
+# Remove any leftover Start.io files if present
+rm -f app/src/main/java/com/example/StartIoBanner.kt
+
 if [ ! -f debug.keystore ]; then
   keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 fi
