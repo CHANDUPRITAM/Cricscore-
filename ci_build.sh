@@ -18,24 +18,43 @@ if ! grep -q "com.startapp:inapp-sdk" app/build.gradle.kts; then
   sed -i 's/dependencies {/dependencies {\n    implementation("com.startapp:inapp-sdk:5.1.0")/' app/build.gradle.kts
 fi
 
-# 2. Initialize Start.io SDK with App ID 210732074 inside MainActivity
+# 2. Add Start.io App ID & permissions into AndroidManifest.xml safely
+python3 -c '
+p = "app/src/main/AndroidManifest.xml"
+s = open(p).read()
+if "com.startapp.sdk.APPLICATION_ID" not in s:
+    meta = "        <meta-data android:name=\"com.startapp.sdk.APPLICATION_ID\" android:value=\"210732074\" />\n    </application>"
+    s = s.replace("</application>", meta, 1)
+if "ACCESS_NETWORK_STATE" not in s:
+    perm = "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\" />\n    <application"
+    s = s.replace("<application", perm, 1)
+open(p, "w").write(s)
+'
+
+# 3. Initialize Start.io SDK safely with try-catch inside MainActivity
 python3 -c '
 p = "app/src/main/java/com/example/MainActivity.kt"
 s = open(p).read()
 if "StartAppSDK" not in s:
     s = s.replace("import android.os.Bundle", "import android.os.Bundle\nimport com.startapp.sdk.adsbase.StartAppAd\nimport com.startapp.sdk.adsbase.StartAppSDK", 1)
-    s = s.replace("super.onCreate(savedInstanceState)", "super.onCreate(savedInstanceState)\n        StartAppSDK.init(this, \"210732074\", true)\n        StartAppAd.disableSplash()", 1)
+    init_code = """super.onCreate(savedInstanceState)
+        try {
+            StartAppSDK.init(this, "210732074", false)
+            StartAppAd.disableSplash()
+        } catch (_: Exception) {}"""
+    s = s.replace("super.onCreate(savedInstanceState)", init_code, 1)
     open(p, "w").write(s)
 '
 
-# 3. Create reusable Start.io Banner Composable & attach to MadeByFooter so it appears across screens
+# 4. Create crash-proof Start.io Banner Composable
 cat << 'EOF' > app/src/main/java/com/example/StartIoBanner.kt
 package com.example
 
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.startapp.sdk.ads.banner.Banner
 
@@ -44,10 +63,12 @@ fun StartIoBannerAd(modifier: Modifier = Modifier) {
     AndroidView(
         modifier = modifier
             .fillMaxWidth()
-            .wrapContentHeight(),
+            .heightIn(min = 50.dp),
         factory = { ctx ->
             Banner(ctx).apply {
-                loadAd()
+                try {
+                    loadAd()
+                } catch (_: Exception) {}
             }
         }
     )
