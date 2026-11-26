@@ -1,12 +1,10 @@
 #!/bin/bash
 set -e
 
-# Save google-services.json safely
 if [ -f app/google-services.json ]; then
   cp app/google-services.json /tmp/google-services.json
 fi
 
-# Start from clean working commit dc1aa77
 git checkout dc1aa77 -- app
 
 if [ -f /tmp/google-services.json ]; then
@@ -39,16 +37,18 @@ if "com.startapp.sdk.APPLICATION_ID" not in s:
 open(p, "w").write(s)
 '
 
-# 3. Create safe Start.io Banner & Delayed Init helper
+# 3. Create Start.io Banner with explicit 50.dp height & MATCH_PARENT width
 cat << 'EOF' > app/src/main/java/com/example/StartIoHelper.kt
 package com.example
 
 import android.content.Context
+import android.view.ViewGroup
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.startapp.sdk.ads.banner.Banner
 import com.startapp.sdk.adsbase.StartAppAd
@@ -74,16 +74,20 @@ fun SafeStartIoBanner() {
     var ready by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        delay(3500L)
+        delay(3200L)
         StartIoManager.ensureInit(context)
         ready = true
     }
 
     if (ready) {
         AndroidView(
-            modifier = Modifier.fillMaxWidth().wrapContentHeight(),
+            modifier = Modifier.fillMaxWidth().height(52.dp),
             factory = { ctx ->
                 Banner(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
                     try { loadAd() } catch (_: Throwable) {}
                 }
             }
@@ -92,17 +96,13 @@ fun SafeStartIoBanner() {
 }
 EOF
 
-# 4. Attach SafeStartIoBanner to MadeByFooter so it shows on Home & Match screens
+# 4. Place SafeStartIoBanner directly above MadeByFooter inside MainActivity Column
 python3 -c '
-import glob
-for path in glob.glob("app/src/main/java/**/MadeByFooter.kt", recursive=True):
-    s = open(path).read()
-    if "SafeStartIoBanner" not in s and "fun MadeByFooter" in s:
-        s = s.replace("\n", "\nimport com.example.SafeStartIoBanner\n", 1)
-        idx = s.find("{", s.find("fun MadeByFooter"))
-        if idx != -1:
-            s = s[:idx+1] + "\n    SafeStartIoBanner()\n" + s[idx+1:]
-            open(path, "w").write(s)
+p = "app/src/main/java/com/example/MainActivity.kt"
+s = open(p).read()
+if "SafeStartIoBanner" not in s and "MadeByFooter(" in s:
+    s = s.replace("MadeByFooter(", "SafeStartIoBanner()\n                    MadeByFooter(", 1)
+    open(p, "w").write(s)
 '
 
 sed -i "s/versionName = \".*\"/versionName = \"v1.0.$RUN_NUM\"/" app/build.gradle.kts
