@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,10 +23,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,11 +47,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material3.FilterChip
 import com.example.domain.InningsState
 import com.example.domain.MatchSnapshot
+import com.example.domain.WinProbabilityEngine
 import com.example.ui.components.BallChipBadge
 import com.example.ui.components.MadeByFooter
 import com.example.ui.components.ManhattanChartCard
@@ -69,6 +77,7 @@ import com.example.ui.components.RunBreakdownCard
 import com.example.ui.components.StatTableHeaderRow
 import com.example.ui.components.StatTableValueRow
 import com.example.ui.components.WagonWheelViewerCard
+import com.example.ui.components.WinProbabilityCard
 import com.example.ui.components.WormGraphCard
 import com.example.ui.components.shareMatchScorecard
 import com.example.ui.theme.LocalCricketColors
@@ -79,7 +88,9 @@ import com.example.viewmodel.LiveMatchViewModel
 fun ScorecardScreen(
     viewModel: LiveMatchViewModel,
     onNavigateBack: () -> Unit,
-    onResumeScoring: ((Long) -> Unit)? = null
+    onResumeScoring: ((Long) -> Unit)? = null,
+    onOpenPlayerProfile: ((String) -> Unit)? = null,
+    onDeleteMatch: (() -> Unit)? = null
 ) {
     val snapshot by viewModel.snapshot.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -96,6 +107,7 @@ fun ScorecardScreen(
     var selectedInnings by remember(snap.currentInningsNumber) {
         mutableIntStateOf(if (snap.innings2.isStarted) 2 else 1)
     }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
     val cricColors = LocalCricketColors.current
 
     Scaffold(
@@ -135,6 +147,14 @@ fun ScorecardScreen(
                         modifier = Modifier.testTag("share_scorecard_button")
                     ) {
                         Icon(Icons.Default.Share, contentDescription = "Share scorecard")
+                    }
+                    if (snap.isMatchCompleted && onDeleteMatch != null) {
+                        IconButton(
+                            onClick = { showDeleteConfirm = true },
+                            modifier = Modifier.testTag("scorecard_delete_match_btn")
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = "Delete finished match")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -191,22 +211,52 @@ fun ScorecardScreen(
                     0 -> ScorecardTabContent(
                         snapshot = snap,
                         selectedInnings = selectedInnings,
-                        onSelectInnings = { selectedInnings = it }
+                        onSelectInnings = { selectedInnings = it },
+                        onOpenPlayerProfile = onOpenPlayerProfile
                     )
                     1 -> OversTabContent(
                         snapshot = snap,
                         selectedInnings = selectedInnings,
-                        onSelectInnings = { selectedInnings = it }
+                        onSelectInnings = { selectedInnings = it },
+                        onOpenPlayerProfile = onOpenPlayerProfile
                     )
                     2 -> WagonWheelTabContent(
                         snapshot = snap,
                         selectedInnings = selectedInnings,
-                        onSelectInnings = { selectedInnings = it }
+                        onSelectInnings = { selectedInnings = it },
+                        onOpenPlayerProfile = onOpenPlayerProfile
                     )
                     3 -> GraphsTabContent(snapshot = snap)
                 }
             }
         }
+    }
+
+    if (showDeleteConfirm && onDeleteMatch != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Match?") },
+            text = {
+                Text("Remove ${snap.hostTeam} vs ${snap.visitorTeam} and all its ball-by-ball history? This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDeleteMatch()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_scorecard_delete_btn")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -215,7 +265,8 @@ fun ScorecardScreen(
 private fun ScorecardTabContent(
     snapshot: MatchSnapshot,
     selectedInnings: Int,
-    onSelectInnings: (Int) -> Unit
+    onSelectInnings: (Int) -> Unit,
+    onOpenPlayerProfile: ((String) -> Unit)? = null
 ) {
     val activeInnings = if (selectedInnings == 2 && snapshot.innings2.isStarted) snapshot.innings2 else snapshot.innings1
 
@@ -333,7 +384,8 @@ private fun ScorecardTabContent(
                                 "${batter.fours}",
                                 "${batter.sixes}",
                                 "%.1f".format(batter.strikeRate)
-                            )
+                            ),
+                            onNameClick = onOpenPlayerProfile?.let { cb -> { cb(batter.name) } }
                         )
                     }
 
@@ -389,7 +441,7 @@ private fun ScorecardTabContent(
                         ) {
                             activeInnings.fallOfWickets.forEach { fow ->
                                 AssistChip(
-                                    onClick = {},
+                                    onClick = { onOpenPlayerProfile?.invoke(fow.batterName) },
                                     label = {
                                         Text(
                                             "${fow.runsAtFall}-${fow.wicketNumber} (${fow.batterName}, ${fow.overDisplay})",
@@ -428,7 +480,8 @@ private fun ScorecardTabContent(
                                 "${bw.runsConceded}",
                                 "${bw.wickets}",
                                 "%.1f".format(bw.economy)
-                            )
+                            ),
+                            onNameClick = onOpenPlayerProfile?.let { cb -> { cb(bw.name) } }
                         )
                     }
                 }
@@ -457,7 +510,8 @@ private fun ScorecardTabContent(
                                     Text(
                                         text = "${p.batter1} ${p.batter1Runs}(${p.batter1Balls})",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = if (onOpenPlayerProfile != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        modifier = if (onOpenPlayerProfile != null) Modifier.clickable { onOpenPlayerProfile(p.batter1) } else Modifier
                                     )
                                     Text(
                                         text = "${p.runs} (${p.balls})${if (p.isUnbroken) "*" else ""}",
@@ -467,7 +521,8 @@ private fun ScorecardTabContent(
                                     Text(
                                         text = "${p.batter2} ${p.batter2Runs}(${p.batter2Balls})",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = if (onOpenPlayerProfile != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        modifier = if (onOpenPlayerProfile != null) Modifier.clickable { onOpenPlayerProfile(p.batter2) } else Modifier
                                     )
                                 }
                                 Row(
@@ -507,7 +562,8 @@ private fun ScorecardTabContent(
 private fun OversTabContent(
     snapshot: MatchSnapshot,
     selectedInnings: Int,
-    onSelectInnings: (Int) -> Unit
+    onSelectInnings: (Int) -> Unit,
+    onOpenPlayerProfile: ((String) -> Unit)? = null
 ) {
     val inn: InningsState = if (selectedInnings == 2 && snapshot.innings2.isStarted) snapshot.innings2 else snapshot.innings1
 
@@ -556,10 +612,15 @@ private fun OversTabContent(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
+                            Column(
+                                modifier = if (onOpenPlayerProfile != null) {
+                                    Modifier.clickable { onOpenPlayerProfile(over.bowlerName) }
+                                } else Modifier
+                            ) {
                                 Text(
                                     text = "Over ${over.overNumber} • ${over.bowlerName}",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = if (onOpenPlayerProfile != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = "Score: ${over.cumulativeRuns}/${over.cumulativeWickets}",
@@ -596,7 +657,8 @@ private fun OversTabContent(
 private fun WagonWheelTabContent(
     snapshot: MatchSnapshot,
     selectedInnings: Int,
-    onSelectInnings: (Int) -> Unit
+    onSelectInnings: (Int) -> Unit,
+    onOpenPlayerProfile: ((String) -> Unit)? = null
 ) {
     val inn: InningsState = if (selectedInnings == 2 && snapshot.innings2.isStarted) snapshot.innings2 else snapshot.innings1
     var selectedBatter by remember(selectedInnings) { mutableIntStateOf(-1) } // -1 = All Batters
@@ -693,12 +755,15 @@ private fun WagonWheelTabContent(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = "Over ${shot.overBallDisplay} • ${shot.batterName}",
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                        color = if (onOpenPlayerProfile != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        modifier = if (onOpenPlayerProfile != null) Modifier.clickable { onOpenPlayerProfile(shot.batterName) } else Modifier
                                     )
                                     Text(
                                         text = "${shot.shotZone} • vs ${shot.bowlerName}",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = if (onOpenPlayerProfile != null) Modifier.clickable { onOpenPlayerProfile(shot.bowlerName) } else Modifier
                                     )
                                 }
                                 Surface(
@@ -723,10 +788,16 @@ private fun WagonWheelTabContent(
 
 @Composable
 private fun GraphsTabContent(snapshot: MatchSnapshot) {
+    val winProbSummary = remember(snapshot.totalEventCount, snapshot.isMatchCompleted, snapshot.rules.totalOvers) {
+        WinProbabilityEngine.calculateFromSnapshot(snapshot)
+    }
     LazyColumn(
         contentPadding = PaddingValues(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        item {
+            WinProbabilityCard(summary = winProbSummary)
+        }
         item {
             ManhattanChartCard(innings1 = snapshot.innings1, innings2 = snapshot.innings2)
         }

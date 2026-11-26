@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -18,20 +19,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.Login
+import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.SportsCricket
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -49,6 +55,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import com.example.R
 import com.example.data.cloud.onGoogleSignInClicked
+import com.example.data.cloud.sendAdminPasswordResetEmail
 import com.example.data.cloud.signInAdminWithEmail
 import com.example.data.cloud.signUpAdminWithEmail
 import com.example.ui.components.MadeByFooter
@@ -85,6 +93,7 @@ import kotlinx.coroutines.launch
 fun AuthScreen(
     onAuthSuccess: () -> Unit,
     onWatchLiveWithoutLogin: (initialCode: String) -> Unit,
+    onSignUpVerificationSent: (email: String, sent: Boolean, warning: String?) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -103,6 +112,8 @@ fun AuthScreen(
     var isEmailLoading by remember { mutableStateOf(false) }
     var isGoogleLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var showForgotPasswordDialog by remember { mutableStateOf(false) }
 
     val anyLoading = isEmailLoading || isGoogleLoading
 
@@ -269,7 +280,7 @@ fun AuthScreen(
                     ) {
                         Column(
                             modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -286,7 +297,7 @@ fun AuthScreen(
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                                     )
                                     Text(
-                                        text = "Only the logged-in Admin can update their own match score.",
+                                        text = "Only verified Admins can broadcast new live matches.",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -300,6 +311,7 @@ fun AuthScreen(
                                         onClick = {
                                             authTab = idx
                                             errorMessage = null
+                                            statusMessage = null
                                         },
                                         shape = SegmentedButtonDefaults.itemShape(idx, 2),
                                         modifier = Modifier.testTag(
@@ -367,7 +379,34 @@ fun AuthScreen(
                                     .testTag("auth_password_input")
                             )
 
-                            if (authTab == 1) {
+                            if (authTab == 0) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(
+                                        onClick = {
+                                            errorMessage = null
+                                            statusMessage = null
+                                            showForgotPasswordDialog = true
+                                        },
+                                        enabled = !anyLoading,
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier.testTag("forgot_password_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.LockReset,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "Forgot Password?",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                    }
+                                }
+                            } else {
                                 OutlinedTextField(
                                     value = confirmPassword,
                                     onValueChange = { confirmPassword = it },
@@ -384,6 +423,53 @@ fun AuthScreen(
                                         .fillMaxWidth()
                                         .testTag("signup_confirm_password_input")
                                 )
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.padding(horizontal = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.MarkEmailRead,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = "A verification link will be sent to your email to unlock live broadcasting.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            if (statusMessage != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("auth_status_banner")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            text = statusMessage!!,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                }
                             }
 
                             if (errorMessage != null) {
@@ -391,7 +477,9 @@ fun AuthScreen(
                                     shape = RoundedCornerShape(12.dp),
                                     color = MaterialTheme.colorScheme.errorContainer,
                                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("auth_error_banner")
                                 ) {
                                     Text(
                                         text = errorMessage!!,
@@ -405,23 +493,35 @@ fun AuthScreen(
                             Button(
                                 onClick = {
                                     errorMessage = null
+                                    statusMessage = null
                                     isEmailLoading = true
                                     scope.launch {
-                                        val result = if (authTab == 0) {
-                                            signInAdminWithEmail(email = email, password = password)
+                                        if (authTab == 0) {
+                                            val result = signInAdminWithEmail(email = email, password = password)
+                                            isEmailLoading = false
+                                            result.onSuccess {
+                                                onAuthSuccess()
+                                            }.onFailure { err ->
+                                                errorMessage = err.message ?: "Authentication failed"
+                                            }
                                         } else {
-                                            signUpAdminWithEmail(
+                                            val result = signUpAdminWithEmail(
                                                 fullName = fullName,
                                                 email = email,
                                                 password = password,
                                                 confirmPassword = confirmPassword
                                             )
-                                        }
-                                        isEmailLoading = false
-                                        result.onSuccess {
-                                            onAuthSuccess()
-                                        }.onFailure { err ->
-                                            errorMessage = err.message ?: "Authentication failed"
+                                            isEmailLoading = false
+                                            result.onSuccess { outcome ->
+                                                onSignUpVerificationSent(
+                                                    outcome.user.email ?: email.trim(),
+                                                    outcome.verificationEmailSent,
+                                                    outcome.verificationWarning
+                                                )
+                                                onAuthSuccess()
+                                            }.onFailure { err ->
+                                                errorMessage = err.message ?: "Sign-up failed"
+                                            }
                                         }
                                     }
                                 },
@@ -472,6 +572,7 @@ fun AuthScreen(
                             OutlinedButton(
                                 onClick = {
                                     errorMessage = null
+                                    statusMessage = null
                                     isGoogleLoading = true
                                     onGoogleSignInClicked(
                                         context = context,
@@ -493,17 +594,32 @@ fun AuthScreen(
                                 enabled = !anyLoading,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(48.dp)
+                                    .height(50.dp)
                                     .testTag("google_sign_in_button"),
-                                shape = RoundedCornerShape(14.dp)
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                             ) {
                                 if (isGoogleLoading) {
                                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("Signing in with Google...")
                                 } else {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = "G",
+                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        text = "Continue with Google",
+                                        text = "Sign in with Google",
                                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold)
                                     )
                                 }
@@ -512,7 +628,7 @@ fun AuthScreen(
                     }
 
                     Text(
-                        text = "Every live match stores its creator's Admin UID so only that Admin can score & edit it, while viewers watch live for free.",
+                        text = "Every live match stores its creator's verified Admin UID so only that Admin can score & edit it, while viewers watch live for free.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -523,4 +639,120 @@ fun AuthScreen(
             MadeByFooter(includeNavBarPadding = true)
         }
     }
+
+    if (showForgotPasswordDialog) {
+        ForgotPasswordDialog(
+            initialEmail = email,
+            onDismiss = { showForgotPasswordDialog = false },
+            onResetEmailSent = { sentEmail ->
+                email = sentEmail
+                showForgotPasswordDialog = false
+                errorMessage = null
+                statusMessage = "If an Admin account exists for $sentEmail, a password reset link has been sent. Please check your inbox and spam folder."
+            }
+        )
+    }
+}
+
+@Composable
+private fun ForgotPasswordDialog(
+    initialEmail: String,
+    onDismiss: () -> Unit,
+    onResetEmailSent: (String) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var resetEmail by remember(initialEmail) { mutableStateOf(initialEmail.trim()) }
+    var isSending by remember { mutableStateOf(false) }
+    var dialogError by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isSending) onDismiss() },
+        modifier = Modifier.testTag("forgot_password_dialog"),
+        icon = {
+            Icon(
+                imageVector = Icons.Default.LockReset,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = {
+            Text(
+                text = "Reset Admin Password",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Enter your registered Admin email address. We'll send a password reset link via Firebase so you can safely recover your account.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = resetEmail,
+                    onValueChange = {
+                        resetEmail = it
+                        dialogError = null
+                    },
+                    label = { Text("Registered Email Address") },
+                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
+                    singleLine = true,
+                    enabled = !isSending,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Email,
+                        imeAction = ImeAction.Done
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("forgot_password_email_input")
+                )
+                if (dialogError != null) {
+                    Text(
+                        text = dialogError!!,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    dialogError = null
+                    isSending = true
+                    scope.launch {
+                        val result = sendAdminPasswordResetEmail(resetEmail)
+                        isSending = false
+                        result.onSuccess {
+                            onResetEmailSent(resetEmail.trim())
+                        }.onFailure { err ->
+                            dialogError = err.message ?: "Failed to send password reset email."
+                        }
+                    }
+                },
+                enabled = !isSending && resetEmail.isNotBlank(),
+                modifier = Modifier.testTag("send_reset_email_btn")
+            ) {
+                if (isSending) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Sending...")
+                } else {
+                    Text("Send Reset Link")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isSending
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
 }

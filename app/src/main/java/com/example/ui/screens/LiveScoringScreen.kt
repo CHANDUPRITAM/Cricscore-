@@ -33,8 +33,11 @@ import android.content.Intent
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PersonOff
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -90,11 +93,15 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.InningsState
 import com.example.domain.MatchSnapshot
+import com.example.domain.WinProbabilityEngine
 import com.example.ui.components.BallChipBadge
 import com.example.ui.components.MadeByFooter
+import com.example.ui.components.PlayerFormDialog
 import com.example.ui.components.ShotDirectionPickerDialog
 import com.example.ui.components.StatTableHeaderRow
 import com.example.ui.components.StatTableValueRow
+import com.example.ui.components.TeamBadgeAvatar
+import com.example.ui.components.WinProbabilityCard
 import com.example.ui.components.shareMatchScorecard
 import com.example.ui.theme.LocalCricketColors
 import com.example.ui.theme.ScoreboardHeroStyle
@@ -120,6 +127,9 @@ fun LiveScoringScreen(
     val isLiveSharingEnabled by viewModel.isLiveSharingEnabled.collectAsStateWithLifecycle()
     val isSyncingLive by viewModel.isSyncingLive.collectAsStateWithLifecycle()
     val liveSyncMessage by viewModel.liveSyncMessage.collectAsStateWithLifecycle()
+    val isAdminEmailVerified by viewModel.isAdminEmailVerified.collectAsStateWithLifecycle()
+    val requiresEmailVerificationPrompt by viewModel.requiresEmailVerificationPrompt.collectAsStateWithLifecycle()
+    val isVerificationBusy by viewModel.isVerificationBusy.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -135,6 +145,8 @@ fun LiveScoringScreen(
     var showEditRulesDialog by remember { mutableStateOf(false) }
     var showChangeBowlerDialog by remember { mutableStateOf(false) }
     var showEndInningsConfirm by remember { mutableStateOf(false) }
+    var showQuickAddPlayerDialog by remember { mutableStateOf(false) }
+    var showDeleteMatchConfirm by remember { mutableStateOf(false) }
     var matchCompleteDismissed by remember { mutableStateOf(false) }
 
     LaunchedEffect(liveSyncMessage) {
@@ -192,11 +204,19 @@ fun LiveScoringScreen(
                         onClick = {
                             if (liveShareCode == null) {
                                 viewModel.startOrResumeLiveBroadcast()
+                                if (isAdminEmailVerified) {
+                                    showLiveShareDialog = true
+                                }
+                            } else {
+                                showLiveShareDialog = true
                             }
-                            showLiveShareDialog = true
                         },
                         shape = RoundedCornerShape(999.dp),
-                        color = if (isLiveSharingEnabled && liveShareCode != null) Color(0xFF16A34A) else Color(0x33FFFFFF),
+                        color = when {
+                            isLiveSharingEnabled && liveShareCode != null -> Color(0xFF16A34A)
+                            !isAdminEmailVerified && liveShareCode == null -> Color(0xFFD97706)
+                            else -> Color(0x33FFFFFF)
+                        },
                         modifier = Modifier
                             .padding(end = 2.dp)
                             .testTag("go_live_broadcast_button")
@@ -207,13 +227,21 @@ fun LiveScoringScreen(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.WifiTethering,
+                                imageVector = if (!isAdminEmailVerified && liveShareCode == null) {
+                                    Icons.Default.MarkEmailUnread
+                                } else {
+                                    Icons.Default.WifiTethering
+                                },
                                 contentDescription = "Go Live Broadcast",
                                 tint = Color.White,
                                 modifier = Modifier.size(15.dp)
                             )
                             Text(
-                                text = if (liveShareCode != null && isLiveSharingEnabled) liveShareCode!! else "GO LIVE",
+                                text = when {
+                                    liveShareCode != null && isLiveSharingEnabled -> liveShareCode!!
+                                    !isAdminEmailVerified -> "VERIFY LIVE"
+                                    else -> "GO LIVE"
+                                },
                                 color = Color.White,
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold)
                             )
@@ -261,6 +289,14 @@ fun LiveScoringScreen(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text("Save / Add Player") },
+                                leadingIcon = { Icon(Icons.Default.PersonAdd, null) },
+                                onClick = {
+                                    showMenu = false
+                                    showQuickAddPlayerDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Wide & No-Ball Rules") },
                                 leadingIcon = { Icon(Icons.Default.Assessment, null) },
                                 onClick = {
@@ -283,6 +319,22 @@ fun LiveScoringScreen(
                                     onClick = {
                                         showMenu = false
                                         showEndInningsConfirm = true
+                                    }
+                                )
+                            }
+                            if (snap.isMatchCompleted) {
+                                DropdownMenuItem(
+                                    text = { Text("Delete Match", color = MaterialTheme.colorScheme.error) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.DeleteOutline,
+                                            null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        showDeleteMatchConfirm = true
                                     }
                                 )
                             }
@@ -316,7 +368,15 @@ fun LiveScoringScreen(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    ScoreboardHeaderBand(snapshot = snap, inn = inn)
+                    val battingTeamPhoto = teamsWithPlayers
+                        .firstOrNull { it.team.name.equals(inn.battingTeam, ignoreCase = true) }
+                        ?.team?.photoBase64
+                        .orEmpty()
+                    ScoreboardHeaderBand(
+                        snapshot = snap,
+                        inn = inn,
+                        battingTeamPhoto = battingTeamPhoto
+                    )
 
                     Column(
                         modifier = Modifier.padding(horizontal = 12.dp),
@@ -331,6 +391,22 @@ fun LiveScoringScreen(
 
                         // This Over Timeline Card
                         ThisOverCard(inn = inn)
+
+                        // Live Win Probability Graph (CRR vs RRR)
+                        if (inn.isStarted) {
+                            val winProbSummary = remember(
+                                snap.totalEventCount,
+                                snap.currentInningsNumber,
+                                snap.isMatchCompleted,
+                                snap.rules.totalOvers
+                            ) {
+                                WinProbabilityEngine.calculateFromSnapshot(snap)
+                            }
+                            WinProbabilityCard(
+                                summary = winProbSummary,
+                                compact = true
+                            )
+                        }
 
                         // Match Completed Banner if dismissed dialog
                         if (snap.isMatchCompleted) {
@@ -371,6 +447,21 @@ fun LiveScoringScreen(
                                         ) {
                                             Text("Undo Last Ball")
                                         }
+                                    }
+                                    OutlinedButton(
+                                        onClick = { showDeleteMatchConfirm = true },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("completed_banner_delete_btn")
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Delete Finished Match", color = MaterialTheme.colorScheme.error)
                                     }
                                 }
                             }
@@ -474,6 +565,11 @@ fun LiveScoringScreen(
             isLastWicket = isLastWicket,
             availableBatters = availableBatters,
             fieldingRoster = rosterFor(inn.bowlingTeam),
+            battingTeam = inn.battingTeam,
+            bowlingTeam = inn.bowlingTeam,
+            allSavedPlayers = allSavedPlayers,
+            excludedBatters = alreadyBatted,
+            onQuickAddPlayer = viewModel::addSavedPlayer,
             onDismiss = viewModel::dismissWicketDialog,
             onConfirm = { runs, type, outBatter, fielder, newBatter ->
                 viewModel.confirmWicket(runs, type, outBatter, fielder, newBatter)
@@ -491,6 +587,10 @@ fun LiveScoringScreen(
             label = "Incoming Batter (${inn.battingTeam})",
             suggestions = suggestions,
             helperNote = null,
+            preferredTeamName = inn.battingTeam,
+            allSavedPlayers = allSavedPlayers,
+            excludedNames = alreadyBatted,
+            onQuickAddPlayer = viewModel::addSavedPlayer,
             onConfirm = { viewModel.setNextBatsman(it) }
         )
     }
@@ -510,6 +610,9 @@ fun LiveScoringScreen(
             helperNote = if (!showChangeBowlerDialog && lastBowler.isNotBlank()) {
                 "Previous over bowled by $lastBowler"
             } else null,
+            preferredTeamName = inn.bowlingTeam,
+            allSavedPlayers = allSavedPlayers,
+            onQuickAddPlayer = viewModel::addSavedPlayer,
             allowDismiss = showChangeBowlerDialog,
             onDismiss = { showChangeBowlerDialog = false },
             onConfirm = { name ->
@@ -525,9 +628,10 @@ fun LiveScoringScreen(
             title = "2nd Innings • Target ${snap.innings1.totalRuns + 1}",
             battingTeam = snap.innings2.battingTeam,
             bowlingTeam = snap.innings2.bowlingTeam,
-            battingRoster = rosterFor(snap.innings2.battingTeam),
-            bowlingRoster = rosterFor(snap.innings2.bowlingTeam),
+            battingRoster = viewModel.rosterForTeam(snap.innings2.battingTeam),
+            bowlingRoster = viewModel.rosterForTeam(snap.innings2.bowlingTeam),
             allSavedPlayers = allSavedPlayers,
+            onQuickAddPlayer = viewModel::addSavedPlayer,
             onDismiss = { /* User can undo last ball via menu or start 2nd innings */ },
             onConfirm = { s, ns, bw -> viewModel.startSecondInnings(s, ns, bw) }
         )
@@ -671,6 +775,72 @@ fun LiveScoringScreen(
         )
     }
 
+    // 4c. Email Verification Gate Dialog for Live Broadcast
+    if (requiresEmailVerificationPrompt) {
+        AlertDialog(
+            onDismissRequest = { if (!isVerificationBusy) viewModel.dismissEmailVerificationPrompt() },
+            modifier = Modifier.testTag("verify_email_for_live_dialog"),
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.MarkEmailUnread,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = {
+                Text(
+                    text = "Verify Email to Go Live",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "New Email/Password Admin accounts must verify their email address before broadcasting a live match. Offline scoring continues normally.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = { viewModel.resendVerificationEmail() },
+                        enabled = !isVerificationBusy,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("dialog_resend_verification_btn")
+                    ) {
+                        Text("Resend Verification Email")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.recheckEmailVerificationAndGoLive() },
+                    enabled = !isVerificationBusy,
+                    modifier = Modifier.testTag("dialog_check_verified_go_live_btn")
+                ) {
+                    if (isVerificationBusy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Checking...")
+                    } else {
+                        Text("I've Verified • Go Live")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { viewModel.dismissEmailVerificationPrompt() },
+                    enabled = !isVerificationBusy
+                ) {
+                    Text("Later")
+                }
+            }
+        )
+    }
+
     // 5. Retire Batter Dialog
     if (showRetireDialog) {
         val alreadyBatted = inn.batters.filter { it.isOut || it.name == inn.striker || it.name == inn.nonStriker }
@@ -679,10 +849,34 @@ fun LiveScoringScreen(
             striker = inn.striker,
             nonStriker = inn.nonStriker,
             suggestions = rosterFor(inn.battingTeam).filter { it !in alreadyBatted },
+            battingTeam = inn.battingTeam,
+            allSavedPlayers = allSavedPlayers,
+            excludedNames = alreadyBatted,
+            onQuickAddPlayer = viewModel::addSavedPlayer,
             onDismiss = { showRetireDialog = false },
             onConfirm = { retiring, replacement ->
                 showRetireDialog = false
                 viewModel.retireBatter(retiring, replacement)
+            }
+        )
+    }
+
+    // 5b. Quick Save / Add Player Dialog from Match Menu
+    if (showQuickAddPlayerDialog) {
+        PlayerFormDialog(
+            title = "Save / Add Player",
+            initialName = "",
+            initialRole = "All-Rounder",
+            initialTeamName = inn.battingTeam,
+            initialPhotoBase64 = "",
+            existingTeamNames = listOf(inn.battingTeam, inn.bowlingTeam).filter { it.isNotBlank() }.distinct(),
+            onDismiss = { showQuickAddPlayerDialog = false },
+            onConfirm = { pName, pRole, pTeam, pPhoto ->
+                viewModel.addSavedPlayer(pName, pRole, pTeam, pPhoto)
+                showQuickAddPlayerDialog = false
+                scope.launch {
+                    snackbarHostState.showSnackbar("Saved $pName to $pTeam")
+                }
             }
         )
     }
@@ -749,7 +943,39 @@ fun LiveScoringScreen(
                 onOpenScorecard(snap.matchId)
             },
             onShare = { shareMatchScorecard(context, snap) },
+            onDeleteMatch = {
+                matchCompleteDismissed = true
+                showDeleteMatchConfirm = true
+            },
             onDismiss = { matchCompleteDismissed = true }
+        )
+    }
+
+    // 10. Delete Finished Match Confirmation
+    if (showDeleteMatchConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteMatchConfirm = false },
+            title = { Text("Delete Match?") },
+            text = {
+                Text("Remove ${snap.hostTeam} vs ${snap.visitorTeam} and all its ball-by-ball history? This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteMatchConfirm = false
+                        viewModel.deleteCurrentMatch { onNavigateBack() }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_scoring_delete_match_btn")
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteMatchConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }
@@ -757,7 +983,8 @@ fun LiveScoringScreen(
 @Composable
 private fun ScoreboardHeaderBand(
     snapshot: MatchSnapshot,
-    inn: InningsState
+    inn: InningsState,
+    battingTeamPhoto: String = ""
 ) {
     val cricColors = LocalCricketColors.current
     Box(
@@ -776,17 +1003,27 @@ private fun ScoreboardHeaderBand(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Bottom
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "${inn.battingTeam.uppercase()} • ${if (inn.inningsNumber == 1) "1ST INN" else "2ND INN"}",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.8.sp
-                        ),
-                        color = Color(0xFFA7F3D0),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TeamBadgeAvatar(
+                        teamName = inn.battingTeam,
+                        photoBase64 = battingTeamPhoto,
+                        size = 42.dp
                     )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${inn.battingTeam.uppercase()} • ${if (inn.inningsNumber == 1) "1ST INN" else "2ND INN"}",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp
+                            ),
+                            color = Color(0xFFA7F3D0),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     Row(
                         verticalAlignment = Alignment.Bottom,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -807,6 +1044,7 @@ private fun ScoreboardHeaderBand(
                                 .testTag("live_overs_text")
                         )
                     }
+                }
                 }
 
                 Column(horizontalAlignment = Alignment.End) {

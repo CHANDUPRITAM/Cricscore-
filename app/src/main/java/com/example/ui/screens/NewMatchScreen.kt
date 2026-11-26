@@ -31,15 +31,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Casino
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.LiveTv
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsCricket
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
@@ -53,11 +54,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -71,7 +72,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -82,15 +82,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import com.example.R
+import com.example.data.local.TeamEntity
 import com.example.data.repository.PlayerWithTeam
 import com.example.data.repository.TeamWithPlayers
 import com.example.domain.MatchSnapshot
 import com.example.ui.components.LiveStatusPill
-import com.example.ui.theme.LocalCricketColors
+import com.example.ui.components.PlayerFormDialog
+import com.example.ui.components.SavedPlayersPickerSection
+import com.example.ui.components.TeamBadgeAvatar
+import com.example.ui.components.TeamFormDialog
 import com.example.ui.theme.ScoreboardMediumStyle
 import com.example.viewmodel.NewMatchFormState
 import kotlinx.coroutines.launch
@@ -120,12 +123,21 @@ fun NewMatchScreen(
     onStartMatchConfirmed: (striker: String, nonStriker: String, bowler: String) -> Unit,
     onResumeMatch: (Long) -> Unit,
     onOpenWatchLive: () -> Unit,
+    onSaveTeam: (name: String, shortCode: String, photoBase64: String) -> Unit = { _, _, _ -> },
+    onUpdateTeam: ((team: TeamEntity, newName: String, newShortCode: String, newPhotoBase64: String) -> Unit)? = null,
+    onQuickAddPlayer: ((playerName: String, role: String, teamName: String, photoBase64: String) -> Unit)? = null,
+    isAdminEmailVerified: Boolean = true,
+    onResendVerification: () -> Unit = {},
+    onRefreshVerification: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showAdvancedRules by remember { mutableStateOf(false) }
     var showOpenersDialog by remember { mutableStateOf(false) }
     var customOversText by remember(formState.totalOvers) { mutableStateOf(formState.totalOvers.toString()) }
     var coinTossMessage by remember { mutableStateOf<String?>(null) }
+    var teamDialogInitialName by remember { mutableStateOf<String?>(null) }
+    var teamDialogExisting by remember { mutableStateOf<TeamEntity?>(null) }
+    var teamDialogAssignSlot by remember { mutableStateOf<String?>(null) } // "HOST", "VISITOR", or null
 
     val coinRotation = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -204,6 +216,78 @@ fun NewMatchScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(alpha = 0.88f)
                             )
+                        }
+                    }
+                }
+            }
+
+            if (!isAdminEmailVerified) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_email_verification_banner"),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.72f)
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.45f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MarkEmailUnread,
+                                    contentDescription = "Email verification required",
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Verify Email to Broadcast Live",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                    Text(
+                                        text = "Offline scoring works right away. Verify your email link to share a new match live.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.9f)
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = onResendVerification,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("home_resend_verification_btn")
+                                ) {
+                                    Text("Resend", maxLines = 1)
+                                }
+                                Button(
+                                    onClick = onRefreshVerification,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("home_check_verification_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("I've Verified", maxLines = 1)
+                                }
+                            }
                         }
                     }
                 }
@@ -335,8 +419,15 @@ fun NewMatchScreen(
                 }
             }
 
-            // Teams Selection Card
+            // Teams Selection & Save Team (Name + Photo) Card
             item {
+                val matchedHostTeam = remember(teams, formState.hostTeam) {
+                    teams.firstOrNull { it.team.name.equals(formState.hostTeam.trim(), ignoreCase = true) }
+                }
+                val matchedVisitorTeam = remember(teams, formState.visitorTeam) {
+                    teams.firstOrNull { it.team.name.equals(formState.visitorTeam.trim(), ignoreCase = true) }
+                }
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.medium,
@@ -355,49 +446,148 @@ fun NewMatchScreen(
                                 text = "Teams",
                                 style = MaterialTheme.typography.titleMedium
                             )
-                            TextButton(
-                                onClick = onSwapTeams,
-                                modifier = Modifier.testTag("swap_teams_button")
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.SwapVert,
-                                    contentDescription = "Swap teams",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Swap")
+                                TextButton(
+                                    onClick = {
+                                        teamDialogExisting = null
+                                        teamDialogInitialName = ""
+                                        teamDialogAssignSlot = null
+                                    },
+                                    modifier = Modifier.testTag("new_match_save_team_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Save team with photo",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("Save Team")
+                                }
+                                TextButton(
+                                    onClick = onSwapTeams,
+                                    modifier = Modifier.testTag("swap_teams_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SwapVert,
+                                        contentDescription = "Swap teams",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("Swap")
+                                }
                             }
                         }
 
-                        OutlinedTextField(
-                            value = formState.hostTeam,
-                            onValueChange = onHostChange,
-                            label = { Text("Host Team") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("host_team_input")
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clickable {
+                                        teamDialogExisting = matchedHostTeam?.team
+                                        teamDialogInitialName = formState.hostTeam.trim()
+                                        teamDialogAssignSlot = "HOST"
+                                    }
+                                    .testTag("host_team_photo_btn")
+                            ) {
+                                TeamBadgeAvatar(
+                                    teamName = hostName,
+                                    photoBase64 = matchedHostTeam?.team?.photoBase64.orEmpty(),
+                                    size = 46.dp
+                                )
+                            }
+                            OutlinedTextField(
+                                value = formState.hostTeam,
+                                onValueChange = onHostChange,
+                                label = { Text("Host Team") },
+                                singleLine = true,
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = {
+                                            teamDialogExisting = matchedHostTeam?.team
+                                            teamDialogInitialName = formState.hostTeam.trim()
+                                            teamDialogAssignSlot = "HOST"
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (matchedHostTeam?.team?.photoBase64.isNullOrBlank()) Icons.Default.CameraAlt else Icons.Default.Edit,
+                                            contentDescription = "Save Host Team name and photo",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("host_team_input")
+                            )
+                        }
 
-                        OutlinedTextField(
-                            value = formState.visitorTeam,
-                            onValueChange = onVisitorChange,
-                            label = { Text("Visitor Team") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("visitor_team_input")
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clickable {
+                                        teamDialogExisting = matchedVisitorTeam?.team
+                                        teamDialogInitialName = formState.visitorTeam.trim()
+                                        teamDialogAssignSlot = "VISITOR"
+                                    }
+                                    .testTag("visitor_team_photo_btn")
+                            ) {
+                                TeamBadgeAvatar(
+                                    teamName = visitorName,
+                                    photoBase64 = matchedVisitorTeam?.team?.photoBase64.orEmpty(),
+                                    size = 46.dp
+                                )
+                            }
+                            OutlinedTextField(
+                                value = formState.visitorTeam,
+                                onValueChange = onVisitorChange,
+                                label = { Text("Visitor Team") },
+                                singleLine = true,
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = {
+                                            teamDialogExisting = matchedVisitorTeam?.team
+                                            teamDialogInitialName = formState.visitorTeam.trim()
+                                            teamDialogAssignSlot = "VISITOR"
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (matchedVisitorTeam?.team?.photoBase64.isNullOrBlank()) Icons.Default.CameraAlt else Icons.Default.Edit,
+                                            contentDescription = "Save Visitor Team name and photo",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("visitor_team_input")
+                            )
+                        }
 
                         if (teams.isNotEmpty()) {
                             Text(
-                                text = "Quick pick saved teams (tap to fill)",
+                                text = "Saved Teams (${teams.size}) — tap to fill or tap icon to edit photo",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 items(teams, key = { it.team.id }) { twp ->
-                                    SuggestionChip(
+                                    val isSelected = formState.hostTeam.equals(twp.team.name, ignoreCase = true) ||
+                                        formState.visitorTeam.equals(twp.team.name, ignoreCase = true)
+                                    Surface(
                                         onClick = {
                                             if (formState.hostTeam == "Team A" || formState.hostTeam.isBlank()) {
                                                 onHostChange(twp.team.name)
@@ -409,9 +599,71 @@ fun NewMatchScreen(
                                                 onHostChange(twp.team.name)
                                             }
                                         },
-                                        label = { Text(twp.team.name) }
-                                    )
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                        },
+                                        border = BorderStroke(
+                                            width = if (isSelected) 1.5.dp else 1.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                        )
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            TeamBadgeAvatar(
+                                                teamName = twp.team.name,
+                                                photoBase64 = twp.team.photoBase64,
+                                                size = 30.dp
+                                            )
+                                            Column {
+                                                Text(
+                                                    text = twp.team.name,
+                                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = "${twp.players.size} players",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    teamDialogExisting = twp.team
+                                                    teamDialogInitialName = twp.team.name
+                                                    teamDialogAssignSlot = null
+                                                },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "Edit ${twp.team.name}",
+                                                    modifier = Modifier.size(15.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    teamDialogExisting = null
+                                    teamDialogInitialName = ""
+                                    teamDialogAssignSlot = null
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Save Team with Name & Photo")
                             }
                         }
                     }
@@ -754,8 +1006,36 @@ fun NewMatchScreen(
         }
     }
 
+    if (teamDialogInitialName != null) {
+        val existing = teamDialogExisting
+        TeamFormDialog(
+            title = if (existing != null) "Edit Team & Photo" else "Save Team (Name & Photo)",
+            initialName = existing?.name ?: teamDialogInitialName.orEmpty(),
+            initialCode = existing?.shortCode.orEmpty(),
+            initialPhotoBase64 = existing?.photoBase64.orEmpty(),
+            onDismiss = {
+                teamDialogInitialName = null
+                teamDialogExisting = null
+                teamDialogAssignSlot = null
+            },
+            onConfirm = { name, code, photo ->
+                if (existing != null && onUpdateTeam != null) {
+                    onUpdateTeam(existing, name, code, photo)
+                } else {
+                    onSaveTeam(name, code, photo)
+                }
+                when (teamDialogAssignSlot) {
+                    "HOST" -> onHostChange(name)
+                    "VISITOR" -> onVisitorChange(name)
+                }
+                teamDialogInitialName = null
+                teamDialogExisting = null
+                teamDialogAssignSlot = null
+            }
+        )
+    }
+
     if (showOpenersDialog) {
-        val allSavedPlayerNames = allSavedPlayers.map { it.player.name }.distinct()
         val teamBatRoster = teams.firstOrNull { it.team.name.equals(batFirstTeam, ignoreCase = true) }
             ?.players?.map { it.name }.orEmpty()
         val teamBowlRoster = teams.firstOrNull { it.team.name.equals(bowlFirstTeam, ignoreCase = true) }
@@ -765,9 +1045,10 @@ fun NewMatchScreen(
             title = "Opening Players • 1st Innings",
             battingTeam = batFirstTeam,
             bowlingTeam = bowlFirstTeam,
-            battingRoster = (teamBatRoster + allSavedPlayerNames).distinct(),
-            bowlingRoster = (teamBowlRoster + allSavedPlayerNames).distinct(),
+            battingRoster = teamBatRoster,
+            bowlingRoster = teamBowlRoster,
             allSavedPlayers = allSavedPlayers,
+            onQuickAddPlayer = onQuickAddPlayer,
             onDismiss = { showOpenersDialog = false },
             onConfirm = { striker, nonStriker, bowler ->
                 showOpenersDialog = false
@@ -830,6 +1111,7 @@ fun OpeningPlayersDialog(
     battingRoster: List<String>,
     bowlingRoster: List<String>,
     allSavedPlayers: List<PlayerWithTeam> = emptyList(),
+    onQuickAddPlayer: ((playerName: String, role: String, teamName: String, photoBase64: String) -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (striker: String, nonStriker: String, bowler: String) -> Unit
 ) {
@@ -838,40 +1120,9 @@ fun OpeningPlayersDialog(
     var bowler by remember { mutableStateOf(bowlingRoster.getOrNull(0) ?: "") }
     // 0 = Striker, 1 = Non-Striker, 2 = Opening Bowler
     var activeSlot by remember { mutableIntStateOf(0) }
-    var searchQuery by remember { mutableStateOf("") }
+    var showQuickAddDialog by remember { mutableStateOf(false) }
 
-    // Build unified saved players list with team & role info, prioritizing matching team
-    val displayPlayers = remember(allSavedPlayers, battingRoster, bowlingRoster, activeSlot, battingTeam, bowlingTeam, searchQuery) {
-        val baseList = if (allSavedPlayers.isNotEmpty()) {
-            allSavedPlayers.distinctBy { it.player.name.lowercase() }
-        } else {
-            (battingRoster + bowlingRoster).distinct().mapIndexed { idx, name ->
-                val resolvedTeam = if (name in battingRoster) battingTeam else bowlingTeam
-                PlayerWithTeam(
-                    player = com.example.data.local.PlayerEntity(
-                        id = idx.toLong(),
-                        teamId = 0L,
-                        name = name,
-                        role = "Player"
-                    ),
-                    teamName = resolvedTeam,
-                    teamShortCode = resolvedTeam.take(3).uppercase().ifBlank { "TM" }
-                )
-            }
-        }
-        val preferredTeam = if (activeSlot == 2) bowlingTeam else battingTeam
-        val sorted = baseList.sortedWith(
-            compareByDescending<PlayerWithTeam> { it.teamName.equals(preferredTeam, ignoreCase = true) }
-                .thenBy { it.player.name.lowercase() }
-        )
-        val q = searchQuery.trim()
-        if (q.isEmpty()) sorted
-        else sorted.filter {
-            it.player.name.contains(q, ignoreCase = true) ||
-                it.teamName.contains(q, ignoreCase = true) ||
-                it.player.role.contains(q, ignoreCase = true)
-        }
-    }
+    val preferredTeam = if (activeSlot == 2) bowlingTeam else battingTeam
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -884,9 +1135,8 @@ fun OpeningPlayersDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Active Slot Selector Chips
                 Text(
-                    text = "Select slot or type name below:",
+                    text = "Tap any saved player below or type new names (all names auto-save):",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -913,7 +1163,6 @@ fun OpeningPlayersDialog(
                     }
                 }
 
-                // 3 Opener Text Fields (Editable + synced with Saved Players tap selection)
                 OutlinedTextField(
                     value = striker,
                     onValueChange = {
@@ -956,151 +1205,50 @@ fun OpeningPlayersDialog(
 
                 HorizontalDivider()
 
-                // Saved Players Picker Section
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Saved Players (${displayPlayers.size})",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = when (activeSlot) {
-                            0 -> "Picking Striker"
-                            1 -> "Picking Non-Striker"
-                            else -> "Picking Bowler"
-                        },
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                }
+                Text(
+                    text = when (activeSlot) {
+                        0 -> "Picking Striker"
+                        1 -> "Picking Non-Striker"
+                        else -> "Picking Opening Bowler"
+                    },
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.tertiary
+                )
 
-                if (allSavedPlayers.size > 4) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("Search saved player...") },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("openers_search_saved_players")
-                    )
-                }
-
-                if (displayPlayers.isEmpty()) {
-                    Text(
-                        text = "No saved players found. Add players in the Players tab or type opener names above.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 200.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                                .padding(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            displayPlayers.forEach { pwt ->
-                                val name = pwt.player.name
-                                val assignedBadge = when {
-                                    name.equals(striker.trim(), ignoreCase = true) -> "STRIKER"
-                                    name.equals(nonStriker.trim(), ignoreCase = true) -> "NON-STRIKER"
-                                    name.equals(bowler.trim(), ignoreCase = true) -> "BOWLER"
-                                    else -> null
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (assignedBadge != null) {
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-                                    } else {
-                                        MaterialTheme.colorScheme.surface
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            when (activeSlot) {
-                                                0 -> {
-                                                    striker = name
-                                                    if (nonStriker.equals(name, ignoreCase = true)) nonStriker = ""
-                                                    activeSlot = 1
-                                                }
-                                                1 -> {
-                                                    nonStriker = name
-                                                    if (striker.equals(name, ignoreCase = true)) striker = ""
-                                                    activeSlot = 2
-                                                }
-                                                else -> {
-                                                    bowler = name
-                                                }
-                                            }
-                                        }
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (assignedBadge != null) Icons.Default.CheckCircle else Icons.Default.Person,
-                                                contentDescription = null,
-                                                tint = if (assignedBadge != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Column {
-                                                Text(
-                                                    text = name,
-                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    text = "${pwt.teamName} • ${pwt.player.role}",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                        }
-                                        if (assignedBadge != null) {
-                                            Surface(
-                                                shape = RoundedCornerShape(999.dp),
-                                                color = MaterialTheme.colorScheme.primary
-                                            ) {
-                                                Text(
-                                                    text = assignedBadge,
-                                                    color = Color.White,
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
+                SavedPlayersPickerSection(
+                    title = "All Saved Players",
+                    preferredTeamName = preferredTeam,
+                    allSavedPlayers = allSavedPlayers,
+                    fallbackNames = (battingRoster + bowlingRoster).distinct(),
+                    badgeForName = { name ->
+                        when {
+                            name.equals(striker.trim(), ignoreCase = true) -> "STRIKER"
+                            name.equals(nonStriker.trim(), ignoreCase = true) -> "NON-STRIKER"
+                            name.equals(bowler.trim(), ignoreCase = true) -> "BOWLER"
+                            else -> null
+                        }
+                    },
+                    onSelectPlayer = { name ->
+                        when (activeSlot) {
+                            0 -> {
+                                striker = name
+                                if (nonStriker.equals(name, ignoreCase = true)) nonStriker = ""
+                                activeSlot = 1
+                            }
+                            1 -> {
+                                nonStriker = name
+                                if (striker.equals(name, ignoreCase = true)) striker = ""
+                                activeSlot = 2
+                            }
+                            else -> {
+                                bowler = name
                             }
                         }
-                    }
-                }
+                    },
+                    onQuickAddPlayerClick = if (onQuickAddPlayer != null) {
+                        { showQuickAddDialog = true }
+                    } else null
+                )
             }
         },
         confirmButton = {
@@ -1122,4 +1270,34 @@ fun OpeningPlayersDialog(
             }
         }
     )
+
+    if (showQuickAddDialog && onQuickAddPlayer != null) {
+        PlayerFormDialog(
+            title = "Save New Player",
+            initialName = "",
+            initialRole = if (activeSlot == 2) "Bowler" else "Batter",
+            initialTeamName = preferredTeam,
+            initialPhotoBase64 = "",
+            existingTeamNames = listOf(battingTeam, bowlingTeam).distinct(),
+            onDismiss = { showQuickAddDialog = false },
+            onConfirm = { pName, pRole, pTeam, pPhoto ->
+                onQuickAddPlayer(pName, pRole, pTeam, pPhoto)
+                when (activeSlot) {
+                    0 -> {
+                        striker = pName
+                        activeSlot = 1
+                    }
+                    1 -> {
+                        nonStriker = pName
+                        activeSlot = 2
+                    }
+                    else -> {
+                        bowler = pName
+                    }
+                }
+                showQuickAddDialog = false
+            }
+        )
+    }
 }
+

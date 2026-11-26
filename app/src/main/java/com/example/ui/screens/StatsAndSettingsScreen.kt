@@ -18,7 +18,9 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SportsCricket
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.material3.Button
@@ -56,6 +58,9 @@ fun StatsAndSettingsScreen(
     preferences: DefaultMatchPreferences,
     adminDisplayName: String,
     adminEmail: String,
+    isEmailVerified: Boolean = true,
+    onResendVerification: () -> Unit = {},
+    onRefreshVerification: () -> Unit = {},
     onOpenPlayerProfile: (String) -> Unit,
     onOpenWatchLive: () -> Unit,
     onSignOut: () -> Unit,
@@ -193,12 +198,20 @@ fun StatsAndSettingsScreen(
                             }
                             Surface(
                                 shape = RoundedCornerShape(999.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer
+                                color = if (isEmailVerified) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.errorContainer
+                                }
                             ) {
                                 Text(
-                                    text = "VERIFIED",
+                                    text = if (isEmailVerified) "VERIFIED" else "UNVERIFIED",
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    color = if (isEmailVerified) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onErrorContainer
+                                    },
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                 )
                             }
@@ -215,6 +228,52 @@ fun StatsAndSettingsScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                            }
+                        }
+
+                        if (!isEmailVerified) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.MarkEmailUnread,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "Verify your email to broadcast new live matches.",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(
+                                            onClick = onResendVerification,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Resend Email", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                        Button(
+                                            onClick = onRefreshVerification,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("I've Verified", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
                             }
                         }
 

@@ -3,6 +3,7 @@ package com.example.data.cloud
 import android.content.Context
 import com.example.R
 import com.example.domain.MatchSnapshot
+import com.example.domain.PlayerCareerStats
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -21,6 +22,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import kotlin.random.Random
 
+data class PlayerCareerSyncInput(
+    val playerName: String,
+    val teamName: String,
+    val role: String,
+    val photoBase64: String,
+    val stats: PlayerCareerStats?
+)
+
 class LiveBroadcastRepository(
     private val db: FirebaseFirestore,
     private val auth: FirebaseAuth = Firebase.auth
@@ -32,10 +41,33 @@ class LiveBroadcastRepository(
     )
 
     private val createdShareCodes = mutableSetOf<String>()
+    private val syncedCareerSignatures = mutableMapOf<String, MutableMap<String, Int>>()
 
     private fun requireUserId(): String {
         return auth.currentUser?.uid?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Admin must be signed in to publish or update live match scores.")
+    }
+
+    fun isCurrentAdminEmailVerified(): Boolean {
+        return auth.currentUser?.isEmailVerified == true
+    }
+
+    suspend fun refreshCurrentAdminVerification(): Boolean {
+        val user = auth.currentUser ?: return false
+        return try {
+            user.reload().await()
+            val refreshed = auth.currentUser ?: return false
+            if (refreshed.isEmailVerified) {
+                refreshed.getIdToken(true).await()
+                true
+            } else {
+                false
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            auth.currentUser?.isEmailVerified == true
+        }
     }
 
     fun generateShareCode(): String {
@@ -119,11 +151,133 @@ class LiveBroadcastRepository(
         }
     }
 
+    suspend fun syncAvatarPhoto(
+        entityType: String,
+        entityName: String,
+        teamName: String = "",
+        photoBase64: String
+    ): Result<Unit> {
+        val cleanName = entityName.trim().take(80)
+        if (cleanName.isEmpty()) return Result.success(Unit)
+        val uid = auth.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return Result.success(Unit)
+        val docId = AvatarDoc.docIdFor(entityType, cleanName, teamName)
+        val docRef = db.collection("users").document(uid).collection("avatars").document(docId)
+        return try {
+            if (photoBase64.isBlank()) {
+                docRef.delete().await()
+            } else {
+                val payload = mapOf(
+                    "ownerUid" to uid,
+                    "entityType" to if (entityType.equals("TEAM", ignoreCase = true)) "TEAM" else "PLAYER",
+                    "entityName" to cleanName,
+                    "teamName" to teamName.trim().take(80),
+                    "photoBase64" to photoBase64.take(32000),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                docRef.set(payload).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchMyAvatars(): Result<List<AvatarDoc>> {
+        val uid = auth.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return Result.success(emptyList())
+        val colRef = db.collection("users").document(uid).collection("avatars")
+        return try {
+            val snap = colRef.get().await()
+            val list = snap.documents.mapNotNull {
+                it.toObject(AvatarDoc::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            }
+            Result.success(list)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, colRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun syncSavedTeam(
+        teamName: String,
+        shortCode: String,
+        photoBase64: String,
+        playerEntries: List<Pair<String, String>>
+    ): Result<Unit> {
+        val cleanName = teamName.trim().take(80)
+        if (cleanName.isEmpty()) return Result.success(Unit)
+        val uid = auth.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return Result.success(Unit)
+        val docId = SavedTeamDoc.docIdFor(cleanName)
+        val docRef = db.collection("users").document(uid).collection("saved_teams").document(docId)
+        val encodedPlayers = playerEntries
+            .distinctBy { it.first.trim().lowercase() }
+            .filter { it.first.trim().isNotEmpty() }
+            .take(60)
+            .map { (name, role) -> SavedTeamDoc.encodePlayerEntry(name, role) }
+        return try {
+            val payload = mapOf(
+                "ownerUid" to uid,
+                "teamName" to cleanName,
+                "shortCode" to shortCode.trim().uppercase().take(8),
+                "photoBase64" to photoBase64.take(32000),
+                "playerEntries" to encodedPlayers,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            docRef.set(payload).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteSavedTeam(teamName: String): Result<Unit> {
+        val cleanName = teamName.trim()
+        if (cleanName.isEmpty()) return Result.success(Unit)
+        val uid = auth.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return Result.success(Unit)
+        val docId = SavedTeamDoc.docIdFor(cleanName)
+        val docRef = db.collection("users").document(uid).collection("saved_teams").document(docId)
+        return try {
+            docRef.delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchMySavedTeams(): Result<List<SavedTeamDoc>> {
+        val uid = auth.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return Result.success(emptyList())
+        val colRef = db.collection("users").document(uid).collection("saved_teams")
+        return try {
+            val snap = colRef.get().await()
+            val list = snap.documents.mapNotNull {
+                it.toObject(SavedTeamDoc::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            }
+            Result.success(list)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, colRef.path)
+            Result.failure(e)
+        }
+    }
+
     suspend fun publishOrUpdateLiveMatch(
         shareCode: String,
         snapshot: MatchSnapshot,
         sharingEnabled: Boolean = true,
-        ballSequence: Long = 0L
+        ballSequence: Long = 0L,
+        hostTeamPhoto: String = "",
+        visitorTeamPhoto: String = ""
     ): Result<String> {
         val normalized = normalizeShareCode(shareCode)
         val docPath = "live_matches/$normalized"
@@ -148,12 +302,21 @@ class LiveBroadcastRepository(
             }
 
             if (!alreadyExists) {
+                val isVerified = isCurrentAdminEmailVerified() || refreshCurrentAdminVerification()
+                if (!isVerified) {
+                    val emailLabel = auth.currentUser?.email ?: "your email"
+                    throw IllegalStateException(
+                        "Please verify $emailLabel from your inbox before going live with a new match."
+                    )
+                }
                 val createPayload = LiveMatchMapper.buildCreatePayload(
                     snapshot = snapshot,
                     adminId = uid,
                     adminName = adminName,
                     sharingEnabled = sharingEnabled,
-                    ballSequence = ballSequence
+                    ballSequence = ballSequence,
+                    hostTeamPhoto = hostTeamPhoto,
+                    visitorTeamPhoto = visitorTeamPhoto
                 )
                 docRef.set(createPayload).await()
                 createdShareCodes.add(normalized)
@@ -162,7 +325,9 @@ class LiveBroadcastRepository(
                     snapshot = snapshot,
                     adminName = adminName,
                     sharingEnabled = sharingEnabled,
-                    ballSequence = ballSequence
+                    ballSequence = ballSequence,
+                    hostTeamPhoto = hostTeamPhoto,
+                    visitorTeamPhoto = visitorTeamPhoto
                 )
                 docRef.update(updatePayload).await()
             }
@@ -287,5 +452,180 @@ class LiveBroadcastRepository(
                 }
                 throw error
             }
+    }
+
+    suspend fun syncMatchPlayerCareers(
+        shareCode: String,
+        players: List<PlayerCareerSyncInput>
+    ): Result<Unit> {
+        val normalized = normalizeShareCode(shareCode)
+        val colPath = "live_matches/$normalized/player_careers"
+        return try {
+            val uid = requireUserId()
+            require(normalized.length in 6..16) { "Invalid share code format" }
+            if (!(isCurrentAdminEmailVerified() || refreshCurrentAdminVerification())) {
+                return Result.success(Unit)
+            }
+
+            val cache = syncedCareerSignatures.getOrPut(normalized) { mutableMapOf() }
+            val changedPayloads = players
+                .distinctBy { PlayerCareerDoc.cleanName(it.playerName).lowercase() }
+                .filter { PlayerCareerDoc.cleanName(it.playerName).isNotBlank() }
+                .map { input ->
+                    PlayerCareerMapper.buildPayload(
+                        adminId = uid,
+                        shareCode = normalized,
+                        playerName = input.playerName,
+                        teamName = input.teamName,
+                        role = input.role,
+                        photoBase64 = input.photoBase64,
+                        stats = input.stats
+                    )
+                }
+                .filter { payload -> cache[payload.docId] != payload.signature }
+
+            if (changedPayloads.isEmpty()) {
+                return Result.success(Unit)
+            }
+
+            val colRef = db.collection("live_matches").document(normalized).collection("player_careers")
+            changedPayloads.chunked(400).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { payload ->
+                    batch.set(colRef.document(payload.docId), payload.fields)
+                }
+                batch.commit().await()
+                chunk.forEach { payload ->
+                    cache[payload.docId] = payload.signature
+                }
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, colPath)
+            Result.failure(e)
+        }
+    }
+
+    fun observePlayerCareer(shareCode: String, playerName: String): Flow<PlayerCareerDoc?> = flow {
+        val normalized = normalizeShareCode(shareCode)
+        val cleanName = PlayerCareerDoc.cleanName(playerName)
+        require(normalized.length in 6..16) { "Invalid match code" }
+        require(cleanName.isNotBlank()) { "Invalid player name" }
+        val docId = PlayerCareerDoc.docIdFor(cleanName)
+        val docPath = "live_matches/$normalized/player_careers/$docId"
+        emitAll(
+            db.collection("live_matches")
+                .document(normalized)
+                .collection("player_careers")
+                .document(docId)
+                .snapshots()
+                .map { snapshot ->
+                    if (!snapshot.exists()) null
+                    else snapshot.toObject(PlayerCareerDoc::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val exceptionToLog = firestoreError ?: (error as? Exception)
+                    if (exceptionToLog != null) {
+                        handleFirestoreError(exceptionToLog, OperationType.GET, docPath)
+                    }
+                    throw error
+                }
+        )
+    }
+
+    fun observeMatchPlayerCareers(shareCode: String): Flow<List<PlayerCareerDoc>> = flow {
+        val normalized = normalizeShareCode(shareCode)
+        if (normalized.length !in 6..16) {
+            emit(emptyList())
+            return@flow
+        }
+        val colPath = "live_matches/$normalized/player_careers"
+        emitAll(
+            db.collection("live_matches")
+                .document(normalized)
+                .collection("player_careers")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.documents
+                        .mapNotNull { it.toObject(PlayerCareerDoc::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+                        .sortedBy { it.playerName.lowercase() }
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val exceptionToLog = firestoreError ?: (error as? Exception)
+                    if (exceptionToLog != null) {
+                        handleFirestoreError(exceptionToLog, OperationType.LIST, colPath)
+                    }
+                    emit(emptyList())
+                }
+        )
+    }
+
+    fun observePlayerCareersForShareCodes(shareCodes: List<String>): Flow<List<PlayerCareerDoc>> {
+        val codes = shareCodes
+            .map { normalizeShareCode(it) }
+            .filter { it.length in 6..16 }
+            .distinct()
+            .take(12)
+        if (codes.isEmpty()) return flowOf(emptyList())
+        return kotlinx.coroutines.flow.combine(codes.map { observeMatchPlayerCareers(it) }) { lists ->
+            lists.flatMap { it }
+        }
+    }
+
+    suspend fun deleteLiveBroadcast(shareCode: String): Result<Unit> {
+        val normalized = normalizeShareCode(shareCode)
+        if (normalized.length !in 6..16) return Result.success(Unit)
+        val docRef = db.collection("live_matches").document(normalized)
+        return try {
+            requireUserId()
+            // Clean up player_careers subcollection best-effort before deleting parent live match document
+            try {
+                val careerSnap = docRef.collection("player_careers").get().await()
+                careerSnap.documents.chunked(400).forEach { chunk ->
+                    val batch = db.batch()
+                    chunk.forEach { d -> batch.delete(d.reference) }
+                    batch.commit().await()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Proceed to delete main broadcast doc even if subcollection cleanup had partial error
+            }
+            docRef.delete().await()
+            createdShareCodes.remove(normalized)
+            syncedCareerSignatures.remove(normalized)
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteLiveBroadcastByLocalMatchId(localMatchId: Long): Result<Unit> {
+        if (auth.currentUser?.uid.isNullOrBlank()) return Result.success(Unit)
+        return try {
+            val code = findExistingShareCodeForLocalMatch(localMatchId).getOrNull()
+            if (!code.isNullOrBlank()) {
+                deleteLiveBroadcast(code)
+            } else {
+                Result.success(Unit)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }

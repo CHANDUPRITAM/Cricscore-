@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MatchEntity::class,
         BallEventEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class CricscoreDatabase : RoomDatabase() {
@@ -38,13 +38,20 @@ abstract class CricscoreDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE teams ADD COLUMN photoBase64 TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE players ADD COLUMN photoBase64 TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): CricscoreDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     CricscoreDatabase::class.java,
                     "cricscore_offline.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

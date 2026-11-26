@@ -17,11 +17,20 @@ interface CricscoreDao {
     @Query("SELECT * FROM teams WHERE LOWER(name) = LOWER(:name) LIMIT 1")
     suspend fun getTeamByName(name: String): TeamEntity?
 
+    @Query("SELECT * FROM teams WHERE id = :teamId LIMIT 1")
+    suspend fun getTeamById(teamId: Long): TeamEntity?
+
+    @Query("SELECT * FROM teams ORDER BY name ASC")
+    suspend fun getAllTeamsOnce(): List<TeamEntity>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertTeam(team: TeamEntity): Long
 
     @Update
     suspend fun updateTeam(team: TeamEntity)
+
+    @Query("UPDATE teams SET photoBase64 = :photoBase64 WHERE id = :teamId")
+    suspend fun updateTeamPhoto(teamId: Long, photoBase64: String)
 
     @Query("DELETE FROM teams WHERE id = :teamId")
     suspend fun deleteTeam(teamId: Long)
@@ -30,8 +39,14 @@ interface CricscoreDao {
     @Query("SELECT * FROM players ORDER BY name ASC")
     fun observeAllPlayers(): Flow<List<PlayerEntity>>
 
+    @Query("SELECT * FROM players ORDER BY name ASC")
+    suspend fun getAllPlayersOnce(): List<PlayerEntity>
+
     @Query("SELECT * FROM players WHERE teamId = :teamId ORDER BY name ASC")
     fun observePlayersForTeam(teamId: Long): Flow<List<PlayerEntity>>
+
+    @Query("SELECT * FROM players WHERE id = :playerId LIMIT 1")
+    suspend fun getPlayerById(playerId: Long): PlayerEntity?
 
     @Query("SELECT * FROM players WHERE teamId = :teamId AND LOWER(name) = LOWER(:name) LIMIT 1")
     suspend fun getPlayerInTeam(teamId: Long, name: String): PlayerEntity?
@@ -41,6 +56,9 @@ interface CricscoreDao {
 
     @Update
     suspend fun updatePlayer(player: PlayerEntity)
+
+    @Query("UPDATE players SET photoBase64 = :photoBase64 WHERE id = :playerId")
+    suspend fun updatePlayerPhoto(playerId: Long, photoBase64: String)
 
     @Query("DELETE FROM players WHERE id = :playerId")
     suspend fun deletePlayer(playerId: Long)

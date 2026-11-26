@@ -3,6 +3,7 @@ package com.example.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.cloud.LiveBroadcastRepository
 import com.example.data.local.DefaultMatchPreferences
 import com.example.data.local.PlayerEntity
 import com.example.data.local.TeamEntity
@@ -38,7 +39,8 @@ data class NewMatchFormState(
 )
 
 class CricscoreViewModel(
-    private val repository: CricscoreRepository
+    private val repository: CricscoreRepository,
+    private val broadcastRepository: LiveBroadcastRepository? = null
 ) : ViewModel() {
 
     val preferences: StateFlow<DefaultMatchPreferences> = repository.preferencesFlow
@@ -135,40 +137,205 @@ class CricscoreViewModel(
                 openingNonStriker = openingNonStriker,
                 openingBowler = openingBowler
             )
+            syncTeamByNameToCloud(host)
+            syncTeamByNameToCloud(visitor)
             onCreated(matchId)
         }
     }
 
     fun deleteMatch(matchId: Long) {
-        viewModelScope.launch { repository.deleteMatch(matchId) }
+        viewModelScope.launch {
+            repository.deleteMatch(matchId)
+            broadcastRepository?.deleteLiveBroadcastByLocalMatchId(matchId)
+        }
     }
 
-    fun addTeam(name: String, shortCode: String) {
-        viewModelScope.launch { repository.saveTeam(name, shortCode) }
+    private suspend fun syncTeamByNameToCloud(teamName: String) {
+        val cloud = broadcastRepository ?: return
+        val twp = repository.getTeamWithPlayersByName(teamName) ?: return
+        cloud.syncSavedTeam(
+            teamName = twp.team.name,
+            shortCode = twp.team.shortCode,
+            photoBase64 = twp.team.photoBase64,
+            playerEntries = twp.players.map { it.name to it.role }
+        )
     }
 
-    fun renameTeam(team: TeamEntity, newName: String, newShortCode: String) {
-        viewModelScope.launch { repository.renameTeam(team, newName, newShortCode) }
+    fun syncCloudAvatars() {
+        val cloud = broadcastRepository ?: return
+        viewModelScope.launch {
+            val remoteTeams = cloud.fetchMySavedTeams().getOrDefault(emptyList())
+            repository.hydrateSavedTeamsFromCloud(remoteTeams)
+            cloud.fetchMyAvatars().onSuccess { avatars ->
+                repository.hydrateAvatarsFromCloud(avatars)
+            }
+            val remoteNames = remoteTeams.map { it.teamName.trim().lowercase() }.toSet()
+            repository.getAllTeamsWithPlayersOnce().forEach { localTwp ->
+                if (localTwp.team.name.trim().lowercase() !in remoteNames) {
+                    cloud.syncSavedTeam(
+                        teamName = localTwp.team.name,
+                        shortCode = localTwp.team.shortCode,
+                        photoBase64 = localTwp.team.photoBase64,
+                        playerEntries = localTwp.players.map { it.name to it.role }
+                    )
+                }
+            }
+        }
+    }
+
+    fun addTeam(name: String, shortCode: String, photoBase64: String = "") {
+        viewModelScope.launch {
+            repository.saveTeam(name, shortCode, photoBase64)
+            syncTeamByNameToCloud(name)
+            if (photoBase64.isNotBlank()) {
+                broadcastRepository?.syncAvatarPhoto(
+                    entityType = "TEAM",
+                    entityName = name.trim(),
+                    photoBase64 = photoBase64
+                )
+            }
+        }
+    }
+
+    fun renameTeam(
+        team: TeamEntity,
+        newName: String,
+        newShortCode: String,
+        newPhotoBase64: String = team.photoBase64
+    ) {
+        viewModelScope.launch {
+            val oldName = team.name
+            val cleanNew = newName.trim()
+            repository.renameTeam(team, cleanNew, newShortCode, newPhotoBase64)
+            if (cleanNew.isNotEmpty() && !oldName.equals(cleanNew, ignoreCase = true)) {
+                broadcastRepository?.deleteSavedTeam(oldName)
+            }
+            syncTeamByNameToCloud(cleanNew.ifEmpty { oldName })
+            if (newPhotoBase64 != team.photoBase64 || (!oldName.equals(cleanNew, ignoreCase = true) && newPhotoBase64.isNotBlank())) {
+                broadcastRepository?.syncAvatarPhoto(
+                    entityType = "TEAM",
+                    entityName = cleanNew,
+                    photoBase64 = newPhotoBase64
+                )
+            }
+        }
+    }
+
+    fun updateTeamPhoto(team: TeamEntity, photoBase64: String) {
+        viewModelScope.launch {
+            repository.updateTeamPhoto(team.id, photoBase64)
+            syncTeamByNameToCloud(team.name)
+            broadcastRepository?.syncAvatarPhoto(
+                entityType = "TEAM",
+                entityName = team.name,
+                photoBase64 = photoBase64
+            )
+        }
     }
 
     fun deleteTeam(teamId: Long) {
-        viewModelScope.launch { repository.deleteTeam(teamId) }
+        viewModelScope.launch {
+            val existingName = repository.getTeamById(teamId)?.name
+            repository.deleteTeam(teamId)
+            if (!existingName.isNullOrBlank()) {
+                broadcastRepository?.deleteSavedTeam(existingName)
+            }
+        }
     }
 
-    fun addPlayer(teamId: Long, playerName: String, role: String) {
-        viewModelScope.launch { repository.addPlayerToTeam(teamId, playerName, role) }
+    fun addPlayer(teamId: Long, playerName: String, role: String, photoBase64: String = "") {
+        viewModelScope.launch {
+            repository.addPlayerToTeam(teamId, playerName, role, photoBase64)
+            val teamName = repository.getTeamById(teamId)?.name.orEmpty()
+            if (teamName.isNotBlank()) {
+                syncTeamByNameToCloud(teamName)
+            }
+            if (photoBase64.isNotBlank()) {
+                broadcastRepository?.syncAvatarPhoto(
+                    entityType = "PLAYER",
+                    entityName = playerName.trim(),
+                    teamName = teamName,
+                    photoBase64 = photoBase64
+                )
+            }
+        }
     }
 
-    fun addPlayerByTeamName(playerName: String, role: String, teamName: String) {
-        viewModelScope.launch { repository.addPlayerByTeamName(playerName, role, teamName) }
+    fun addPlayerByTeamName(
+        playerName: String,
+        role: String,
+        teamName: String,
+        photoBase64: String = ""
+    ) {
+        viewModelScope.launch {
+            val resolvedTeam = teamName.trim().ifEmpty { "My Squad" }
+            repository.addPlayerByTeamName(playerName, role, resolvedTeam, photoBase64)
+            syncTeamByNameToCloud(resolvedTeam)
+            if (photoBase64.isNotBlank()) {
+                broadcastRepository?.syncAvatarPhoto(
+                    entityType = "PLAYER",
+                    entityName = playerName.trim(),
+                    teamName = resolvedTeam,
+                    photoBase64 = photoBase64
+                )
+            }
+        }
     }
 
-    fun updatePlayer(player: PlayerEntity, newName: String, newRole: String, newTeamName: String) {
-        viewModelScope.launch { repository.updatePlayer(player, newName, newRole, newTeamName) }
+    fun updatePlayer(
+        player: PlayerEntity,
+        newName: String,
+        newRole: String,
+        newTeamName: String,
+        newPhotoBase64: String = player.photoBase64
+    ) {
+        viewModelScope.launch {
+            val previousTeamName = repository.getTeamById(player.teamId)?.name.orEmpty()
+            repository.updatePlayer(player, newName, newRole, newTeamName, newPhotoBase64)
+            val resolvedTeam = newTeamName.trim().ifBlank { previousTeamName }
+            if (previousTeamName.isNotBlank() && !previousTeamName.equals(resolvedTeam, ignoreCase = true)) {
+                syncTeamByNameToCloud(previousTeamName)
+            }
+            if (resolvedTeam.isNotBlank()) {
+                syncTeamByNameToCloud(resolvedTeam)
+            }
+            if (newPhotoBase64 != player.photoBase64 || (!player.name.equals(newName.trim(), ignoreCase = true) && newPhotoBase64.isNotBlank())) {
+                broadcastRepository?.syncAvatarPhoto(
+                    entityType = "PLAYER",
+                    entityName = newName.trim(),
+                    teamName = resolvedTeam,
+                    photoBase64 = newPhotoBase64
+                )
+            }
+        }
+    }
+
+    fun updatePlayerPhoto(player: PlayerEntity, teamName: String, photoBase64: String) {
+        viewModelScope.launch {
+            repository.updatePlayerPhoto(player.id, photoBase64)
+            if (teamName.isNotBlank()) {
+                syncTeamByNameToCloud(teamName)
+            }
+            broadcastRepository?.syncAvatarPhoto(
+                entityType = "PLAYER",
+                entityName = player.name,
+                teamName = teamName,
+                photoBase64 = photoBase64
+            )
+        }
     }
 
     fun deletePlayer(playerId: Long) {
-        viewModelScope.launch { repository.deletePlayer(playerId) }
+        viewModelScope.launch {
+            val affectedTeamName = repository.allPlayersWithTeamFlow
+                .first()
+                .firstOrNull { it.player.id == playerId }
+                ?.teamName
+            repository.deletePlayer(playerId)
+            if (!affectedTeamName.isNullOrBlank()) {
+                syncTeamByNameToCloud(affectedTeamName)
+            }
+        }
     }
 
     fun setThemeMode(mode: ThemeMode) {
@@ -202,11 +369,14 @@ class CricscoreViewModel(
     }
 
     companion object {
-        fun factory(repository: CricscoreRepository): ViewModelProvider.Factory =
+        fun factory(
+            repository: CricscoreRepository,
+            broadcastRepository: LiveBroadcastRepository? = null
+        ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return CricscoreViewModel(repository) as T
+                    return CricscoreViewModel(repository, broadcastRepository) as T
                 }
             }
     }

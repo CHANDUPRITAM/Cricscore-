@@ -1,5 +1,7 @@
 package com.example.data.repository
 
+import com.example.data.cloud.AvatarDoc
+import com.example.data.cloud.SavedTeamDoc
 import com.example.data.local.BallEventEntity
 import com.example.data.local.CricscoreDao
 import com.example.data.local.DefaultMatchPreferences
@@ -117,49 +119,98 @@ class CricscoreRepository(
         lastManStands = lastManStands
     )
 
-    suspend fun saveTeam(name: String, shortCode: String? = null): Long {
+    suspend fun saveTeam(name: String, shortCode: String? = null, photoBase64: String = ""): Long {
         val clean = name.trim()
         if (clean.isEmpty()) return -1L
         val existing = dao.getTeamByName(clean)
-        if (existing != null) return existing.id
+        if (existing != null) {
+            if (photoBase64.isNotBlank() && existing.photoBase64 != photoBase64) {
+                dao.updateTeamPhoto(existing.id, photoBase64)
+            }
+            return existing.id
+        }
         val code = shortCode?.trim()?.uppercase()?.take(4).takeUnless { it.isNullOrEmpty() }
             ?: generateShortCode(clean)
-        return dao.insertTeam(TeamEntity(name = clean, shortCode = code))
+        return dao.insertTeam(TeamEntity(name = clean, shortCode = code, photoBase64 = photoBase64))
     }
 
-    suspend fun renameTeam(team: TeamEntity, newName: String, newShortCode: String) {
+    suspend fun renameTeam(
+        team: TeamEntity,
+        newName: String,
+        newShortCode: String,
+        newPhotoBase64: String = team.photoBase64
+    ) {
         val clean = newName.trim()
         if (clean.isEmpty()) return
         dao.updateTeam(
             team.copy(
                 name = clean,
-                shortCode = newShortCode.trim().uppercase().take(4).ifEmpty { generateShortCode(clean) }
+                shortCode = newShortCode.trim().uppercase().take(4).ifEmpty { generateShortCode(clean) },
+                photoBase64 = newPhotoBase64
             )
         )
     }
 
+    suspend fun updateTeamPhoto(teamId: Long, photoBase64: String) {
+        dao.updateTeamPhoto(teamId, photoBase64)
+    }
+
+    suspend fun getTeamById(teamId: Long): TeamEntity? = dao.getTeamById(teamId)
+
+    suspend fun getTeamWithPlayersByName(teamName: String): TeamWithPlayers? {
+        val clean = teamName.trim()
+        if (clean.isEmpty()) return null
+        val team = dao.getTeamByName(clean) ?: return null
+        val players = dao.getAllPlayersOnce().filter { it.teamId == team.id }
+        return TeamWithPlayers(team = team, players = players)
+    }
+
+    suspend fun getAllTeamsWithPlayersOnce(): List<TeamWithPlayers> {
+        val teams = dao.getAllTeamsOnce()
+        val playersByTeam = dao.getAllPlayersOnce().groupBy { it.teamId }
+        return teams.map { t -> TeamWithPlayers(team = t, players = playersByTeam[t.id].orEmpty()) }
+    }
+
     suspend fun deleteTeam(teamId: Long) = dao.deleteTeam(teamId)
 
-    suspend fun addPlayerToTeam(teamId: Long, playerName: String, role: String = "All-Rounder") {
+    suspend fun addPlayerToTeam(
+        teamId: Long,
+        playerName: String,
+        role: String = "All-Rounder",
+        photoBase64: String = ""
+    ) {
         val clean = playerName.trim()
         if (clean.isEmpty()) return
         val existing = dao.getPlayerInTeam(teamId, clean)
         if (existing == null) {
-            dao.insertPlayer(PlayerEntity(teamId = teamId, name = clean, role = role))
+            dao.insertPlayer(PlayerEntity(teamId = teamId, name = clean, role = role, photoBase64 = photoBase64))
+        } else if (photoBase64.isNotBlank() && existing.photoBase64 != photoBase64) {
+            dao.updatePlayerPhoto(existing.id, photoBase64)
         }
     }
 
-    suspend fun addPlayerByTeamName(playerName: String, role: String, teamName: String) {
+    suspend fun addPlayerByTeamName(
+        playerName: String,
+        role: String,
+        teamName: String,
+        photoBase64: String = ""
+    ) {
         val cleanPlayer = playerName.trim()
         if (cleanPlayer.isEmpty()) return
         val cleanTeam = teamName.trim().ifEmpty { "My Squad" }
         val teamId = saveTeam(cleanTeam)
         if (teamId > 0) {
-            addPlayerToTeam(teamId, cleanPlayer, role)
+            addPlayerToTeam(teamId, cleanPlayer, role, photoBase64)
         }
     }
 
-    suspend fun updatePlayer(player: PlayerEntity, newName: String, newRole: String, newTeamName: String) {
+    suspend fun updatePlayer(
+        player: PlayerEntity,
+        newName: String,
+        newRole: String,
+        newTeamName: String,
+        newPhotoBase64: String = player.photoBase64
+    ) {
         val cleanName = newName.trim()
         if (cleanName.isEmpty()) return
         val teamId = if (newTeamName.isNotBlank()) saveTeam(newTeamName.trim()) else player.teamId
@@ -167,9 +218,89 @@ class CricscoreRepository(
             player.copy(
                 name = cleanName,
                 role = newRole,
-                teamId = if (teamId > 0) teamId else player.teamId
+                teamId = if (teamId > 0) teamId else player.teamId,
+                photoBase64 = newPhotoBase64
             )
         )
+    }
+
+    suspend fun updatePlayerPhoto(playerId: Long, photoBase64: String) {
+        dao.updatePlayerPhoto(playerId, photoBase64)
+    }
+
+    suspend fun hydrateAvatarsFromCloud(avatars: List<AvatarDoc>) {
+        if (avatars.isEmpty()) return
+        val localTeams = dao.getAllTeamsOnce().associateBy { it.name.trim().lowercase() }
+        val localPlayers = dao.getAllPlayersOnce()
+        val teamsById = localTeams.values.associateBy { it.id }
+
+        avatars.forEach { avatar ->
+            if (avatar.photoBase64.isBlank()) return@forEach
+            if (avatar.entityType.equals("TEAM", ignoreCase = true)) {
+                val existingTeam = localTeams[avatar.entityName.trim().lowercase()]
+                if (existingTeam != null) {
+                    if (existingTeam.photoBase64.isBlank()) {
+                        dao.updateTeamPhoto(existingTeam.id, avatar.photoBase64)
+                    }
+                } else {
+                    saveTeam(avatar.entityName, photoBase64 = avatar.photoBase64)
+                }
+            } else if (avatar.entityType.equals("PLAYER", ignoreCase = true)) {
+                val matchingPlayers = localPlayers.filter { p ->
+                    val sameName = p.name.equals(avatar.entityName.trim(), ignoreCase = true)
+                    val tName = teamsById[p.teamId]?.name.orEmpty()
+                    sameName && (avatar.teamName.isBlank() || tName.equals(avatar.teamName.trim(), ignoreCase = true))
+                }
+                if (matchingPlayers.isNotEmpty()) {
+                    matchingPlayers.forEach { p ->
+                        if (p.photoBase64.isBlank()) {
+                            dao.updatePlayerPhoto(p.id, avatar.photoBase64)
+                        }
+                    }
+                } else if (avatar.teamName.isNotBlank()) {
+                    addPlayerByTeamName(
+                        playerName = avatar.entityName,
+                        role = "All-Rounder",
+                        teamName = avatar.teamName,
+                        photoBase64 = avatar.photoBase64
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun hydrateSavedTeamsFromCloud(savedTeams: List<SavedTeamDoc>) {
+        if (savedTeams.isEmpty()) return
+        savedTeams.forEach { doc ->
+            val cleanTeamName = doc.teamName.trim()
+            if (cleanTeamName.isEmpty()) return@forEach
+            val existing = dao.getTeamByName(cleanTeamName)
+            val teamId = if (existing == null) {
+                saveTeam(
+                    name = cleanTeamName,
+                    shortCode = doc.shortCode.ifBlank { null },
+                    photoBase64 = doc.photoBase64
+                )
+            } else {
+                val needPhoto = existing.photoBase64.isBlank() && doc.photoBase64.isNotBlank()
+                val needCode = existing.shortCode.isBlank() && doc.shortCode.isNotBlank()
+                if (needPhoto || needCode) {
+                    dao.updateTeam(
+                        existing.copy(
+                            shortCode = if (needCode) doc.shortCode.take(4).uppercase() else existing.shortCode,
+                            photoBase64 = if (needPhoto) doc.photoBase64 else existing.photoBase64
+                        )
+                    )
+                }
+                existing.id
+            }
+            if (teamId > 0) {
+                doc.playerEntries.forEach { entry ->
+                    val (playerName, role) = SavedTeamDoc.decodePlayerEntry(entry) ?: return@forEach
+                    addPlayerToTeam(teamId = teamId, playerName = playerName, role = role)
+                }
+            }
+        }
     }
 
     suspend fun ensurePlayerSaved(teamName: String, playerName: String) {
@@ -289,6 +420,9 @@ class CricscoreRepository(
         shotY: Float? = null,
         shotZone: String? = null
     ) {
+        ensurePlayerSaved(battingTeam, striker)
+        ensurePlayerSaved(battingTeam, nonStriker)
+        ensurePlayerSaved(bowlingTeam, bowler)
         if (!fielderName.isNullOrBlank()) {
             ensurePlayerSaved(bowlingTeam, fielderName)
         }

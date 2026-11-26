@@ -62,11 +62,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -94,6 +97,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -103,6 +109,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.data.cloud.LiveBroadcastRepository
 import com.example.data.cloud.authStateFlow
+import com.example.data.cloud.refreshAdminVerificationStatus
+import com.example.data.cloud.sendAdminVerificationEmail
 import com.example.data.cloud.signOutWithCleanup
 import com.example.data.local.CricscoreDatabase
 import com.example.data.local.PreferencesManager
@@ -126,6 +134,7 @@ import com.example.viewmodel.LiveSpectatorViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val ROUTE_HOME = "home"
 private const val ROUTE_LIVE_SCORING = "live/{matchId}"
@@ -152,7 +161,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val mainViewModel: CricscoreViewModel = viewModel(
-                factory = CricscoreViewModel.factory(repository)
+                factory = CricscoreViewModel.factory(repository, broadcastRepository)
             )
             val preferences by mainViewModel.preferences.collectAsStateWithLifecycle()
 
@@ -394,12 +403,19 @@ private fun AppContent(
     mainViewModel: CricscoreViewModel
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
 
     val currentUser by remember { Firebase.auth.authStateFlow() }
         .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
     var guestWatchCode by rememberSaveable { mutableStateOf<String?>(null) }
+    var isEmailVerified by remember(currentUser?.uid) {
+        mutableStateOf(currentUser?.isEmailVerified == true)
+    }
+    var pendingSignUpVerificationNotice by rememberSaveable { mutableStateOf<String?>(null) }
+    var isVerificationBusy by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(currentUser?.uid) {
         val user = currentUser
@@ -409,6 +425,81 @@ private fun AppContent(
                 displayName = user.displayName ?: user.email?.substringBefore("@") ?: "Cricscore Admin",
                 email = user.email
             )
+            mainViewModel.syncCloudAvatars()
+            if (!user.isEmailVerified) {
+                refreshAdminVerificationStatus().onSuccess { verified ->
+                    isEmailVerified = verified
+                }
+            } else {
+                isEmailVerified = true
+            }
+        }
+    }
+
+    LaunchedEffect(pendingSignUpVerificationNotice, currentUser?.uid) {
+        val notice = pendingSignUpVerificationNotice
+        if (currentUser != null && !notice.isNullOrBlank()) {
+            pendingSignUpVerificationNotice = null
+            snackbarHostState.showSnackbar(notice)
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, currentUser?.uid, isEmailVerified) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && currentUser != null && !isEmailVerified) {
+                scope.launch {
+                    refreshAdminVerificationStatus().onSuccess { verified ->
+                        if (verified) {
+                            isEmailVerified = true
+                            snackbarHostState.showSnackbar("Email verified! Live broadcasting is now unlocked.")
+                        }
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val resendVerificationAction: () -> Unit = {
+        if (!isVerificationBusy) {
+            isVerificationBusy = true
+            scope.launch {
+                val res = sendAdminVerificationEmail()
+                res.onSuccess {
+                    val refreshed = Firebase.auth.currentUser
+                    if (refreshed?.isEmailVerified == true) {
+                        isEmailVerified = true
+                        snackbarHostState.showSnackbar("Email already verified! Live broadcasting is unlocked.")
+                    } else {
+                        val targetEmail = currentUser?.email ?: "your email"
+                        snackbarHostState.showSnackbar("Verification link sent to $targetEmail. Check Inbox or Spam.")
+                    }
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar(err.message ?: "Could not send verification email.")
+                }
+                isVerificationBusy = false
+            }
+        }
+    }
+
+    val refreshVerificationAction: () -> Unit = {
+        if (!isVerificationBusy) {
+            isVerificationBusy = true
+            scope.launch {
+                val res = refreshAdminVerificationStatus()
+                res.onSuccess { verified ->
+                    isEmailVerified = verified
+                    if (verified) {
+                        snackbarHostState.showSnackbar("Email verified! Live broadcasting is now unlocked.")
+                    } else {
+                        snackbarHostState.showSnackbar("Email not verified yet. Open the link in your inbox and try again.")
+                    }
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar(err.message ?: "Could not check verification status.")
+                }
+                isVerificationBusy = false
+            }
         }
     }
 
@@ -436,6 +527,13 @@ private fun AppContent(
                 onAuthSuccess = { guestWatchCode = null },
                 onWatchLiveWithoutLogin = { initialCode ->
                     guestWatchCode = initialCode
+                },
+                onSignUpVerificationSent = { email, sent, warning ->
+                    pendingSignUpVerificationNotice = if (sent) {
+                        "Verification email sent to $email. Verify your email before starting a live match."
+                    } else {
+                        warning ?: "Account created. Please verify $email before broadcasting live."
+                    }
                 }
             )
         }
@@ -448,6 +546,9 @@ private fun AppContent(
     val matches by mainViewModel.matches.collectAsStateWithLifecycle()
     val leaderboardAndStats by mainViewModel.leaderboardAndStats.collectAsStateWithLifecycle()
     val preferences by mainViewModel.preferences.collectAsStateWithLifecycle()
+    val teamPhotosMap = remember(teamsWithPlayers) {
+        teamsWithPlayers.associate { it.team.name.trim().lowercase() to it.team.photoBase64 }
+    }
 
     val navController = rememberNavController()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -470,6 +571,7 @@ private fun AppContent(
 
                 Scaffold(
                     contentWindowInsets = WindowInsets.safeDrawing,
+                    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                     topBar = {
                         TopAppBar(
                             title = {
@@ -578,7 +680,13 @@ private fun AppContent(
                                     },
                                     onOpenWatchLive = {
                                         navController.navigate("watch_live?code=")
-                                    }
+                                    },
+                                    onSaveTeam = mainViewModel::addTeam,
+                                    onUpdateTeam = mainViewModel::renameTeam,
+                                    onQuickAddPlayer = mainViewModel::addPlayerByTeamName,
+                                    isAdminEmailVerified = isEmailVerified,
+                                    onResendVerification = resendVerificationAction,
+                                    onRefreshVerification = refreshVerificationAction
                                 )
                                 1 -> MatchHistoryScreen(
                                     matches = matches,
@@ -589,7 +697,8 @@ private fun AppContent(
                                         navController.navigate("scorecard/$matchId")
                                     },
                                     onDeleteMatch = mainViewModel::deleteMatch,
-                                    onStartNewMatchTab = { selectedTab = 0 }
+                                    onStartNewMatchTab = { selectedTab = 0 },
+                                    teamPhotosMap = teamPhotosMap
                                 )
                                 2 -> TeamsScreen(
                                     teams = teamsWithPlayers,
@@ -597,10 +706,12 @@ private fun AppContent(
                                     playerStatsMap = leaderboardAndStats.second,
                                     onAddTeam = mainViewModel::addTeam,
                                     onRenameTeam = mainViewModel::renameTeam,
+                                    onUpdateTeamPhoto = mainViewModel::updateTeamPhoto,
                                     onDeleteTeam = mainViewModel::deleteTeam,
                                     onAddPlayerToTeam = mainViewModel::addPlayer,
                                     onAddPlayerByTeamName = mainViewModel::addPlayerByTeamName,
                                     onUpdatePlayer = mainViewModel::updatePlayer,
+                                    onUpdatePlayerPhoto = mainViewModel::updatePlayerPhoto,
                                     onDeletePlayer = mainViewModel::deletePlayer,
                                     onOpenPlayerProfile = { playerName ->
                                         navController.navigate("player/${Uri.encode(playerName)}")
@@ -613,6 +724,9 @@ private fun AppContent(
                                         ?: currentUser?.email?.substringBefore("@")
                                         ?: "Cricscore Admin",
                                     adminEmail = currentUser?.email ?: "",
+                                    isEmailVerified = isEmailVerified,
+                                    onResendVerification = resendVerificationAction,
+                                    onRefreshVerification = refreshVerificationAction,
                                     onOpenPlayerProfile = { playerName ->
                                         navController.navigate("player/${Uri.encode(playerName)}")
                                     },
@@ -679,6 +793,17 @@ private fun AppContent(
                         navController.navigate("live/$id") {
                             popUpTo("scorecard/$id") { inclusive = true }
                         }
+                    },
+                    onOpenPlayerProfile = { playerName ->
+                        val clean = com.example.data.cloud.PlayerCareerDoc.cleanName(playerName)
+                        if (clean.isNotBlank()) {
+                            navController.navigate("player/${Uri.encode(clean)}")
+                        }
+                    },
+                    onDeleteMatch = {
+                        scorecardVm.deleteCurrentMatch {
+                            navController.popBackStack()
+                        }
                     }
                 )
             }
@@ -697,13 +822,31 @@ private fun AppContent(
                 ?: leaderboardAndStats.second.entries.firstOrNull {
                     it.key.equals(playerName, ignoreCase = true)
                 }?.value
+            val resolvedTeamName = playerEntry?.teamName ?: stats?.teamName ?: "Unassigned"
             PlayerProfileScreen(
                 playerName = playerEntry?.player?.name ?: playerName,
                 role = playerEntry?.player?.role ?: "All-Rounder",
-                teamName = playerEntry?.teamName ?: stats?.teamName ?: "Unassigned",
+                teamName = resolvedTeamName,
                 stats = stats,
                 onNavigateBack = { navController.popBackStack() },
-                onOpenMatchScorecard = { id -> navController.navigate("scorecard/$id") }
+                onOpenMatchScorecard = { id -> navController.navigate("scorecard/$id") },
+                photoBase64 = playerEntry?.player?.photoBase64.orEmpty(),
+                onUpdatePhoto = { newPhoto ->
+                    if (playerEntry != null) {
+                        mainViewModel.updatePlayerPhoto(
+                            player = playerEntry.player,
+                            teamName = playerEntry.teamName,
+                            photoBase64 = newPhoto
+                        )
+                    } else {
+                        mainViewModel.addPlayerByTeamName(
+                            playerName = playerName,
+                            role = "All-Rounder",
+                            teamName = resolvedTeamName.ifBlank { "My Squad" },
+                            photoBase64 = newPhoto
+                        )
+                    }
+                }
             )
         }
 

@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -51,8 +52,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.repository.PlayerWithTeam
 import com.example.domain.DismissalType
 import com.example.domain.MatchSnapshot
+import com.example.ui.components.PlayerFormDialog
+import com.example.ui.components.SavedPlayersPickerSection
+import com.example.ui.components.TeamBadgeAvatar
 import com.example.ui.theme.LocalCricketColors
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -64,6 +69,11 @@ fun WicketDialog(
     isLastWicket: Boolean,
     availableBatters: List<String>,
     fieldingRoster: List<String>,
+    battingTeam: String = "",
+    bowlingTeam: String = "",
+    allSavedPlayers: List<PlayerWithTeam> = emptyList(),
+    excludedBatters: Set<String> = emptySet(),
+    onQuickAddPlayer: ((playerName: String, role: String, teamName: String, photoBase64: String) -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (runsScored: Int, type: DismissalType, outBatter: String, fielder: String, newBatter: String) -> Unit
 ) {
@@ -72,6 +82,11 @@ fun WicketDialog(
     var fielder by remember { mutableStateOf("") }
     var newBatter by remember { mutableStateOf(availableBatters.firstOrNull().orEmpty()) }
     var runs by remember { mutableIntStateOf(initialRuns) }
+    var showQuickAddPlayer by remember { mutableStateOf(false) }
+
+    val savedPhotoLookup = remember(allSavedPlayers) {
+        allSavedPlayers.associate { it.player.name.trim().lowercase() to it.player.photoBase64 }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -146,10 +161,21 @@ fun WicketDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    if (fieldingRoster.isNotEmpty()) {
+                    val allFielderChoices = (fieldingRoster + allSavedPlayers.map { it.player.name }).distinct()
+                    if (allFielderChoices.isNotEmpty()) {
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(fieldingRoster) { f ->
-                                SuggestionChip(onClick = { fielder = f }, label = { Text(f) })
+                            items(allFielderChoices) { f ->
+                                SuggestionChip(
+                                    onClick = { fielder = f },
+                                    icon = {
+                                        TeamBadgeAvatar(
+                                            teamName = f,
+                                            photoBase64 = savedPhotoLookup[f.trim().lowercase()].orEmpty(),
+                                            size = 20.dp
+                                        )
+                                    },
+                                    label = { Text(f) }
+                                )
                             }
                         }
                     }
@@ -160,19 +186,24 @@ fun WicketDialog(
                         value = newBatter,
                         onValueChange = { newBatter = it },
                         label = { Text("New Batsman") },
-                        placeholder = { Text("Enter incoming batter") },
+                        placeholder = { Text("Tap saved player or type new name") },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("wicket_new_batter_input")
                     )
-                    if (availableBatters.isNotEmpty()) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(availableBatters) { player ->
-                                SuggestionChip(onClick = { newBatter = player }, label = { Text(player) })
-                            }
-                        }
-                    }
+                    SavedPlayersPickerSection(
+                        title = "Saved Players",
+                        preferredTeamName = battingTeam,
+                        allSavedPlayers = allSavedPlayers,
+                        fallbackNames = availableBatters,
+                        excludedNames = excludedBatters,
+                        selectedName = newBatter,
+                        onSelectPlayer = { newBatter = it },
+                        onQuickAddPlayerClick = if (onQuickAddPlayer != null) {
+                            { showQuickAddPlayer = true }
+                        } else null
+                    )
                 } else {
                     Text(
                         text = "This wicket ends the innings (All Out).",
@@ -198,6 +229,23 @@ fun WicketDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+
+    if (showQuickAddPlayer && onQuickAddPlayer != null) {
+        PlayerFormDialog(
+            title = "Save New Batter",
+            initialName = "",
+            initialRole = "Batter",
+            initialTeamName = battingTeam.ifBlank { "My Squad" },
+            initialPhotoBase64 = "",
+            existingTeamNames = listOf(battingTeam, bowlingTeam).filter { it.isNotBlank() }.distinct(),
+            onDismiss = { showQuickAddPlayer = false },
+            onConfirm = { pName, pRole, pTeam, pPhoto ->
+                onQuickAddPlayer(pName, pRole, pTeam, pPhoto)
+                newBatter = pName
+                showQuickAddPlayer = false
+            }
+        )
+    }
 }
 
 @Composable
@@ -206,17 +254,25 @@ fun NextPlayerPromptDialog(
     label: String,
     suggestions: List<String>,
     helperNote: String?,
+    preferredTeamName: String = "",
+    allSavedPlayers: List<PlayerWithTeam> = emptyList(),
+    excludedNames: Set<String> = emptySet(),
+    onQuickAddPlayer: ((playerName: String, role: String, teamName: String, photoBase64: String) -> Unit)? = null,
     allowDismiss: Boolean = false,
     onDismiss: () -> Unit = {},
     onConfirm: (String) -> Unit
 ) {
     var playerName by remember { mutableStateOf("") }
+    var showQuickAddPlayer by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = { if (allowDismiss) onDismiss() },
         title = { Text(title, style = MaterialTheme.typography.titleLarge) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 if (!helperNote.isNullOrBlank()) {
                     Text(
                         text = helperNote,
@@ -228,22 +284,24 @@ fun NextPlayerPromptDialog(
                     value = playerName,
                     onValueChange = { playerName = it },
                     label = { Text(label) },
+                    placeholder = { Text("Tap saved player or type new name") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("next_player_input")
                 )
-                if (suggestions.isNotEmpty()) {
-                    Text("Quick select:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(suggestions) { item ->
-                            SuggestionChip(
-                                onClick = { playerName = item },
-                                label = { Text(item) }
-                            )
-                        }
-                    }
-                }
+                SavedPlayersPickerSection(
+                    title = "Saved Players",
+                    preferredTeamName = preferredTeamName,
+                    allSavedPlayers = allSavedPlayers,
+                    fallbackNames = suggestions,
+                    excludedNames = excludedNames,
+                    selectedName = playerName,
+                    onSelectPlayer = { playerName = it },
+                    onQuickAddPlayerClick = if (onQuickAddPlayer != null) {
+                        { showQuickAddPlayer = true }
+                    } else null
+                )
             }
         },
         confirmButton = {
@@ -261,6 +319,23 @@ fun NextPlayerPromptDialog(
             { TextButton(onClick = onDismiss) { Text("Cancel") } }
         } else null
     )
+
+    if (showQuickAddPlayer && onQuickAddPlayer != null) {
+        PlayerFormDialog(
+            title = "Save New Player",
+            initialName = "",
+            initialRole = if (label.contains("Bowler", ignoreCase = true)) "Bowler" else "Batter",
+            initialTeamName = preferredTeamName.ifBlank { "My Squad" },
+            initialPhotoBase64 = "",
+            existingTeamNames = listOf(preferredTeamName).filter { it.isNotBlank() },
+            onDismiss = { showQuickAddPlayer = false },
+            onConfirm = { pName, pRole, pTeam, pPhoto ->
+                onQuickAddPlayer(pName, pRole, pTeam, pPhoto)
+                playerName = pName
+                showQuickAddPlayer = false
+            }
+        )
+    }
 }
 
 @Composable
@@ -268,17 +343,25 @@ fun RetireBatterDialog(
     striker: String,
     nonStriker: String,
     suggestions: List<String>,
+    battingTeam: String = "",
+    allSavedPlayers: List<PlayerWithTeam> = emptyList(),
+    excludedNames: Set<String> = emptySet(),
+    onQuickAddPlayer: ((playerName: String, role: String, teamName: String, photoBase64: String) -> Unit)? = null,
     onDismiss: () -> Unit,
     onConfirm: (retiring: String, replacement: String) -> Unit
 ) {
     var selectedRetiring by remember { mutableStateOf(striker) }
     var replacement by remember { mutableStateOf(suggestions.firstOrNull().orEmpty()) }
+    var showQuickAddPlayer by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Retire Batsman (Hurt)") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 if (nonStriker.isNotBlank()) {
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                         SegmentedButton(
@@ -301,16 +384,22 @@ fun RetireBatterDialog(
                     value = replacement,
                     onValueChange = { replacement = it },
                     label = { Text("Replacement Batsman") },
+                    placeholder = { Text("Tap saved player or type new name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                if (suggestions.isNotEmpty()) {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(suggestions) { p ->
-                            SuggestionChip(onClick = { replacement = p }, label = { Text(p) })
-                        }
-                    }
-                }
+                SavedPlayersPickerSection(
+                    title = "Saved Players",
+                    preferredTeamName = battingTeam,
+                    allSavedPlayers = allSavedPlayers,
+                    fallbackNames = suggestions,
+                    excludedNames = excludedNames,
+                    selectedName = replacement,
+                    onSelectPlayer = { replacement = it },
+                    onQuickAddPlayerClick = if (onQuickAddPlayer != null) {
+                        { showQuickAddPlayer = true }
+                    } else null
+                )
             }
         },
         confirmButton = {
@@ -322,6 +411,23 @@ fun RetireBatterDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+
+    if (showQuickAddPlayer && onQuickAddPlayer != null) {
+        PlayerFormDialog(
+            title = "Save New Batter",
+            initialName = "",
+            initialRole = "Batter",
+            initialTeamName = battingTeam.ifBlank { "My Squad" },
+            initialPhotoBase64 = "",
+            existingTeamNames = listOf(battingTeam).filter { it.isNotBlank() },
+            onDismiss = { showQuickAddPlayer = false },
+            onConfirm = { pName, pRole, pTeam, pPhoto ->
+                onQuickAddPlayer(pName, pRole, pTeam, pPhoto)
+                replacement = pName
+                showQuickAddPlayer = false
+            }
+        )
+    }
 }
 
 @Composable
@@ -409,6 +515,7 @@ fun MatchCompleteDialog(
     snapshot: MatchSnapshot,
     onViewScorecard: () -> Unit,
     onShare: () -> Unit,
+    onDeleteMatch: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -484,6 +591,20 @@ fun MatchCompleteDialog(
                                 )
                             }
                         }
+                    }
+                }
+                if (onDeleteMatch != null) {
+                    TextButton(
+                        onClick = onDeleteMatch,
+                        modifier = Modifier.testTag("match_complete_delete_btn")
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.padding(horizontal = 3.dp))
+                        Text("Delete Match", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

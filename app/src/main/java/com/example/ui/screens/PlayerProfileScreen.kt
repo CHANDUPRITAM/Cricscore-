@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,11 +35,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,7 +60,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.domain.PlayerCareerStats
 import com.example.domain.PlayerMatchPerformance
+import com.example.ui.components.EditableProfileAvatar
 import com.example.ui.components.MadeByFooter
+import com.example.ui.components.ProfilePhotoUtils
 import com.example.ui.components.TeamBadgeAvatar
 import com.example.ui.components.WagonWheelViewerCard
 import com.example.ui.components.formatMatchDate
@@ -58,6 +70,7 @@ import com.example.ui.components.sharePlayerCareer
 import com.example.ui.theme.LocalCricketColors
 import com.example.ui.theme.ScoreboardMediumStyle
 import com.example.ui.theme.TabularStatStyle
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,13 +80,37 @@ fun PlayerProfileScreen(
     teamName: String,
     stats: PlayerCareerStats?,
     onNavigateBack: () -> Unit,
-    onOpenMatchScorecard: (Long) -> Unit
+    onOpenMatchScorecard: (Long) -> Unit,
+    photoBase64: String = "",
+    onUpdatePhoto: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val cricColors = LocalCricketColors.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var isCompressingPhoto by remember { mutableStateOf(false) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null && onUpdatePhoto != null) {
+            scope.launch {
+                isCompressingPhoto = true
+                val compressed = ProfilePhotoUtils.compressGalleryPhotoToBase64(context, uri)
+                isCompressingPhoto = false
+                if (compressed != null) {
+                    onUpdatePhoto(compressed)
+                    snackbarHostState.showSnackbar("Profile photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)")
+                } else {
+                    snackbarHostState.showSnackbar("Could not process selected photo")
+                }
+            }
+        }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Player Career Stats", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
@@ -134,12 +171,30 @@ fun PlayerProfileScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
-                                TeamBadgeAvatar(
-                                    teamName = playerName,
-                                    containerColor = Color.White.copy(alpha = 0.2f),
-                                    contentColor = Color.White,
-                                    size = 62.dp
-                                )
+                                if (onUpdatePhoto != null) {
+                                    EditableProfileAvatar(
+                                        label = playerName,
+                                        photoBase64 = photoBase64,
+                                        isCompressing = isCompressingPhoto,
+                                        containerColor = Color.White.copy(alpha = 0.2f),
+                                        contentColor = Color.White,
+                                        size = 64.dp,
+                                        onClick = {
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        },
+                                        modifier = Modifier.testTag("player_profile_avatar_btn")
+                                    )
+                                } else {
+                                    TeamBadgeAvatar(
+                                        teamName = playerName,
+                                        photoBase64 = photoBase64,
+                                        containerColor = Color.White.copy(alpha = 0.2f),
+                                        contentColor = Color.White,
+                                        size = 62.dp
+                                    )
+                                }
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = playerName,
@@ -315,7 +370,7 @@ fun PlayerProfileScreen(
 }
 
 @Composable
-private fun HeroStatChip(label: String, value: String, modifier: Modifier = Modifier) {
+internal fun HeroStatChip(label: String, value: String, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
@@ -341,7 +396,7 @@ private fun HeroStatChip(label: String, value: String, modifier: Modifier = Modi
 }
 
 @Composable
-private fun CareerStatsGridCard(
+internal fun CareerStatsGridCard(
     title: String,
     items: List<Pair<String, String>>,
     modifier: Modifier = Modifier
@@ -402,7 +457,7 @@ private fun CareerStatsGridCard(
 }
 
 @Composable
-private fun PlayerPerformanceCard(
+internal fun PlayerPerformanceCard(
     perf: PlayerMatchPerformance,
     onClick: () -> Unit,
     modifier: Modifier = Modifier

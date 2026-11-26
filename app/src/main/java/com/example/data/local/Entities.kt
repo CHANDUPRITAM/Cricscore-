@@ -13,6 +13,7 @@ data class TeamEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val shortCode: String,
+    val photoBase64: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -32,7 +33,8 @@ data class PlayerEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val teamId: Long,
     val name: String,
-    val role: String = "All-Rounder"
+    val role: String = "All-Rounder",
+    val photoBase64: String = ""
 )
 
 @Entity(tableName = "matches")

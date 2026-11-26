@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,7 +46,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,10 +56,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -66,24 +72,39 @@ import com.example.data.local.TeamEntity
 import com.example.data.repository.PlayerWithTeam
 import com.example.data.repository.TeamWithPlayers
 import com.example.domain.PlayerCareerStats
-import com.example.ui.components.TeamBadgeAvatar
+import com.example.ui.components.EditableProfileAvatar
+import com.example.ui.components.PlayerFormDialog
+import com.example.ui.components.ProfilePhotoUtils
+import com.example.ui.components.TeamFormDialog
 import com.example.ui.theme.TabularStatStyle
+import kotlinx.coroutines.launch
+
+private sealed interface QuickPhotoTarget {
+    data class Team(val team: TeamEntity) : QuickPhotoTarget
+    data class Player(val player: PlayerEntity, val teamName: String) : QuickPhotoTarget
+}
 
 @Composable
 fun TeamsScreen(
     teams: List<TeamWithPlayers>,
     allPlayers: List<PlayerWithTeam>,
     playerStatsMap: Map<String, PlayerCareerStats>,
-    onAddTeam: (name: String, shortCode: String) -> Unit,
-    onRenameTeam: (TeamEntity, newName: String, newShortCode: String) -> Unit,
+    onAddTeam: (name: String, shortCode: String, photoBase64: String) -> Unit,
+    onRenameTeam: (TeamEntity, newName: String, newShortCode: String, newPhotoBase64: String) -> Unit,
+    onUpdateTeamPhoto: (TeamEntity, photoBase64: String) -> Unit,
     onDeleteTeam: (Long) -> Unit,
-    onAddPlayerToTeam: (teamId: Long, playerName: String, role: String) -> Unit,
-    onAddPlayerByTeamName: (playerName: String, role: String, teamName: String) -> Unit,
-    onUpdatePlayer: (player: PlayerEntity, newName: String, newRole: String, newTeamName: String) -> Unit,
+    onAddPlayerToTeam: (teamId: Long, playerName: String, role: String, photoBase64: String) -> Unit,
+    onAddPlayerByTeamName: (playerName: String, role: String, teamName: String, photoBase64: String) -> Unit,
+    onUpdatePlayer: (player: PlayerEntity, newName: String, newRole: String, newTeamName: String, newPhotoBase64: String) -> Unit,
+    onUpdatePlayerPhoto: (player: PlayerEntity, teamName: String, photoBase64: String) -> Unit,
     onDeletePlayer: (Long) -> Unit,
     onOpenPlayerProfile: (playerName: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
     // 0 = Players (dedicated view with Add Player & Career Stats), 1 = Teams
     var activeSegment by rememberSaveable { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
@@ -97,6 +118,47 @@ fun TeamsScreen(
     var editingPlayer by remember { mutableStateOf<PlayerWithTeam?>(null) }
     var teamToDelete by remember { mutableStateOf<TeamEntity?>(null) }
     var playerToDelete by remember { mutableStateOf<PlayerWithTeam?>(null) }
+
+    var quickPhotoTarget by remember { mutableStateOf<QuickPhotoTarget?>(null) }
+    var compressingTeamId by remember { mutableStateOf<Long?>(null) }
+    var compressingPlayerId by remember { mutableStateOf<Long?>(null) }
+
+    val quickPhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val target = quickPhotoTarget
+        quickPhotoTarget = null
+        if (uri != null && target != null) {
+            scope.launch {
+                when (target) {
+                    is QuickPhotoTarget.Team -> compressingTeamId = target.team.id
+                    is QuickPhotoTarget.Player -> compressingPlayerId = target.player.id
+                }
+                val compressed = ProfilePhotoUtils.compressGalleryPhotoToBase64(context, uri)
+                compressingTeamId = null
+                compressingPlayerId = null
+
+                if (compressed != null) {
+                    when (target) {
+                        is QuickPhotoTarget.Team -> {
+                            onUpdateTeamPhoto(target.team, compressed)
+                            snackbarHostState.showSnackbar(
+                                "${target.team.name} photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)"
+                            )
+                        }
+                        is QuickPhotoTarget.Player -> {
+                            onUpdatePlayerPhoto(target.player, target.teamName, compressed)
+                            snackbarHostState.showSnackbar(
+                                "${target.player.name} photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)"
+                            )
+                        }
+                    }
+                } else {
+                    snackbarHostState.showSnackbar("Could not process selected photo")
+                }
+            }
+        }
+    }
 
     val filteredPlayers = remember(allPlayers, searchQuery, roleFilter) {
         allPlayers.filter { pwt ->
@@ -214,6 +276,13 @@ fun TeamsScreen(
                                 PlayerDirectoryCard(
                                     playerWithTeam = pwt,
                                     stats = stats,
+                                    isCompressingPhoto = compressingPlayerId == pwt.player.id,
+                                    onPickPhoto = {
+                                        quickPhotoTarget = QuickPhotoTarget.Player(pwt.player, pwt.teamName)
+                                        quickPhotoLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
                                     onOpenCareer = { onOpenPlayerProfile(pwt.player.name) },
                                     onEdit = { editingPlayer = pwt },
                                     onDelete = { playerToDelete = pwt }
@@ -282,7 +351,19 @@ fun TeamsScreen(
                                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                                 modifier = Modifier.weight(1f)
                                             ) {
-                                                TeamBadgeAvatar(teamName = twp.team.name, size = 44.dp)
+                                                EditableProfileAvatar(
+                                                    label = twp.team.name,
+                                                    photoBase64 = twp.team.photoBase64,
+                                                    isCompressing = compressingTeamId == twp.team.id,
+                                                    size = 46.dp,
+                                                    onClick = {
+                                                        quickPhotoTarget = QuickPhotoTarget.Team(twp.team)
+                                                        quickPhotoLauncher.launch(
+                                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                        )
+                                                    },
+                                                    modifier = Modifier.testTag("team_avatar_picker_${twp.team.id}")
+                                                )
                                                 Column {
                                                     Text(
                                                         text = twp.team.name,
@@ -339,8 +420,20 @@ fun TeamsScreen(
                                                                 .clickable { onOpenPlayerProfile(player.name) }
                                                                 .padding(horizontal = 14.dp, vertical = 10.dp),
                                                             verticalAlignment = Alignment.CenterVertically,
-                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                                                         ) {
+                                                            EditableProfileAvatar(
+                                                                label = player.name,
+                                                                photoBase64 = player.photoBase64,
+                                                                isCompressing = compressingPlayerId == player.id,
+                                                                size = 38.dp,
+                                                                onClick = {
+                                                                    quickPhotoTarget = QuickPhotoTarget.Player(player, twp.team.name)
+                                                                    quickPhotoLauncher.launch(
+                                                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                                    )
+                                                                }
+                                                            )
                                                             Column(modifier = Modifier.weight(1f)) {
                                                                 Text(
                                                                     text = player.name,
@@ -388,6 +481,14 @@ fun TeamsScreen(
             }
         }
 
+        // Snackbar for instant photo compression & save feedback
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 84.dp)
+        )
+
         // Context-Aware Primary FAB: Add Player on Players tab, Add Team on Teams tab
         ExtendedFloatingActionButton(
             onClick = {
@@ -413,10 +514,11 @@ fun TeamsScreen(
             initialName = "",
             initialRole = "All-Rounder",
             initialTeamName = teams.firstOrNull()?.team?.name ?: "My Squad",
+            initialPhotoBase64 = "",
             existingTeamNames = teams.map { it.team.name },
             onDismiss = { showQuickAddPlayerDialog = false },
-            onConfirm = { name, role, teamName ->
-                onAddPlayerByTeamName(name, role, teamName)
+            onConfirm = { name, role, teamName, photo ->
+                onAddPlayerByTeamName(name, role, teamName, photo)
                 showQuickAddPlayerDialog = false
             }
         )
@@ -428,10 +530,11 @@ fun TeamsScreen(
             initialName = pwt.player.name,
             initialRole = pwt.player.role,
             initialTeamName = pwt.teamName,
+            initialPhotoBase64 = pwt.player.photoBase64,
             existingTeamNames = teams.map { it.team.name },
             onDismiss = { editingPlayer = null },
-            onConfirm = { name, role, teamName ->
-                onUpdatePlayer(pwt.player, name, role, teamName)
+            onConfirm = { name, role, teamName, photo ->
+                onUpdatePlayer(pwt.player, name, role, teamName, photo)
                 editingPlayer = null
             }
         )
@@ -442,9 +545,10 @@ fun TeamsScreen(
             title = "Create Team",
             initialName = "",
             initialCode = "",
+            initialPhotoBase64 = "",
             onDismiss = { showAddTeamDialog = false },
-            onConfirm = { name, code ->
-                onAddTeam(name, code)
+            onConfirm = { name, code, photo ->
+                onAddTeam(name, code, photo)
                 showAddTeamDialog = false
             }
         )
@@ -455,9 +559,10 @@ fun TeamsScreen(
             title = "Edit Team",
             initialName = t.name,
             initialCode = t.shortCode,
+            initialPhotoBase64 = t.photoBase64,
             onDismiss = { editingTeam = null },
-            onConfirm = { name, code ->
-                onRenameTeam(t, name, code)
+            onConfirm = { name, code, photo ->
+                onRenameTeam(t, name, code, photo)
                 editingTeam = null
             }
         )
@@ -469,11 +574,12 @@ fun TeamsScreen(
             initialName = "",
             initialRole = "All-Rounder",
             initialTeamName = t.name,
+            initialPhotoBase64 = "",
             existingTeamNames = teams.map { it.team.name },
             lockTeam = true,
             onDismiss = { addPlayerForTeam = null },
-            onConfirm = { playerName, role, _ ->
-                onAddPlayerToTeam(t.id, playerName, role)
+            onConfirm = { playerName, role, _, photo ->
+                onAddPlayerToTeam(t.id, playerName, role, photo)
                 expandedTeamId = t.id
                 addPlayerForTeam = null
             }
@@ -515,6 +621,8 @@ fun TeamsScreen(
 private fun PlayerDirectoryCard(
     playerWithTeam: PlayerWithTeam,
     stats: PlayerCareerStats?,
+    isCompressingPhoto: Boolean,
+    onPickPhoto: () -> Unit,
     onOpenCareer: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -542,7 +650,14 @@ private fun PlayerDirectoryCard(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    TeamBadgeAvatar(teamName = playerWithTeam.player.name, size = 44.dp)
+                    EditableProfileAvatar(
+                        label = playerWithTeam.player.name,
+                        photoBase64 = playerWithTeam.player.photoBase64,
+                        isCompressing = isCompressingPhoto,
+                        size = 46.dp,
+                        onClick = onPickPhoto,
+                        modifier = Modifier.testTag("player_avatar_picker_${playerWithTeam.player.id}")
+                    )
                     Column {
                         Text(
                             text = playerWithTeam.player.name,
@@ -618,130 +733,3 @@ private fun MiniStatCell(label: String, value: String) {
     }
 }
 
-@Composable
-private fun TeamFormDialog(
-    title: String,
-    initialName: String,
-    initialCode: String,
-    onDismiss: () -> Unit,
-    onConfirm: (name: String, shortCode: String) -> Unit
-) {
-    var name by remember { mutableStateOf(initialName) }
-    var code by remember { mutableStateOf(initialCode) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Team Name") },
-                    placeholder = { Text("e.g. Royal Strikers") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("team_name_dialog_input")
-                )
-                OutlinedTextField(
-                    value = code,
-                    onValueChange = { code = it.take(4).uppercase() },
-                    label = { Text("Short Code (optional)") },
-                    placeholder = { Text("e.g. RST") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { if (name.isNotBlank()) onConfirm(name.trim(), code.trim()) },
-                enabled = name.isNotBlank()
-            ) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-@Composable
-private fun PlayerFormDialog(
-    title: String,
-    initialName: String,
-    initialRole: String,
-    initialTeamName: String,
-    existingTeamNames: List<String>,
-    lockTeam: Boolean = false,
-    onDismiss: () -> Unit,
-    onConfirm: (playerName: String, role: String, teamName: String) -> Unit
-) {
-    var playerName by remember { mutableStateOf(initialName) }
-    var teamName by remember { mutableStateOf(initialTeamName) }
-    val roles = listOf("Batter", "Bowler", "All-Rounder", "WK-Batter")
-    var selectedRole by remember { mutableStateOf(initialRole) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = playerName,
-                    onValueChange = { playerName = it },
-                    label = { Text("Player Name") },
-                    placeholder = { Text("e.g. Rohit Sharma") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("player_name_dialog_input")
-                )
-
-                if (!lockTeam) {
-                    OutlinedTextField(
-                        value = teamName,
-                        onValueChange = { teamName = it },
-                        label = { Text("Team Name (optional)") },
-                        placeholder = { Text("e.g. My Squad") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("player_team_dialog_input")
-                    )
-                    if (existingTeamNames.isNotEmpty()) {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(existingTeamNames) { t ->
-                                SuggestionChip(onClick = { teamName = t }, label = { Text(t) })
-                            }
-                        }
-                    }
-                }
-
-                Text("Playing Role", style = MaterialTheme.typography.labelMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    roles.take(2).forEach { r ->
-                        FilterChip(
-                            selected = selectedRole == r,
-                            onClick = { selectedRole = r },
-                            label = { Text(r, style = MaterialTheme.typography.labelSmall) }
-                        )
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    roles.drop(2).forEach { r ->
-                        FilterChip(
-                            selected = selectedRole == r,
-                            onClick = { selectedRole = r },
-                            label = { Text(r, style = MaterialTheme.typography.labelSmall) }
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (playerName.isNotBlank()) {
-                        onConfirm(playerName.trim(), selectedRole, teamName.trim().ifEmpty { "My Squad" })
-                    }
-                },
-                enabled = playerName.isNotBlank(),
-                modifier = Modifier.testTag("confirm_save_player_btn")
-            ) { Text("Save Player") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}

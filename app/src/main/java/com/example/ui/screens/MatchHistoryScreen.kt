@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -67,6 +68,7 @@ fun MatchHistoryScreen(
     onOpenScorecard: (Long) -> Unit,
     onDeleteMatch: (Long) -> Unit,
     onStartNewMatchTab: () -> Unit,
+    teamPhotosMap: Map<String, String> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     var filterIndex by remember { mutableIntStateOf(0) } // 0 = All, 1 = Live, 2 = Completed
@@ -158,6 +160,7 @@ fun MatchHistoryScreen(
                     items(filtered, key = { it.matchId }) { snap ->
                         MatchHistoryCard(
                             snapshot = snap,
+                            teamPhotosMap = teamPhotosMap,
                             onCardClick = {
                                 if (snap.isMatchCompleted) onOpenScorecard(snap.matchId)
                                 else onResumeMatch(snap.matchId)
@@ -180,10 +183,14 @@ fun MatchHistoryScreen(
             title = { Text("Delete Match?") },
             text = { Text("Remove ${target.hostTeam} vs ${target.visitorTeam} and all its ball-by-ball history? This cannot be undone.") },
             confirmButton = {
-                Button(onClick = {
-                    onDeleteMatch(target.matchId)
-                    matchToDelete = null
-                }) { Text("Delete") }
+                Button(
+                    onClick = {
+                        onDeleteMatch(target.matchId)
+                        matchToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_delete_match_btn")
+                ) { Text("Delete") }
             },
             dismissButton = {
                 TextButton(onClick = { matchToDelete = null }) { Text("Cancel") }
@@ -195,6 +202,7 @@ fun MatchHistoryScreen(
 @Composable
 private fun MatchHistoryCard(
     snapshot: MatchSnapshot,
+    teamPhotosMap: Map<String, String>,
     onCardClick: () -> Unit,
     onResume: () -> Unit,
     onScorecard: () -> Unit,
@@ -234,7 +242,12 @@ private fun MatchHistoryCard(
                     IconButton(onClick = onShare, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Default.Share, contentDescription = "Share match", modifier = Modifier.size(18.dp))
                     }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("delete_match_icon_${snapshot.matchId}")
+                    ) {
                         Icon(
                             Icons.Default.DeleteOutline,
                             contentDescription = "Delete match",
@@ -248,6 +261,7 @@ private fun MatchHistoryCard(
             // Innings 1 Row
             TeamScoreLine(
                 teamName = snapshot.innings1.battingTeam,
+                photoBase64 = teamPhotosMap[snapshot.innings1.battingTeam.trim().lowercase()].orEmpty(),
                 scoreText = if (snapshot.innings1.isStarted) {
                     "${snapshot.innings1.totalRuns}/${snapshot.innings1.wickets} (${snapshot.innings1.oversDisplay})"
                 } else "Yet to bat",
@@ -257,6 +271,7 @@ private fun MatchHistoryCard(
             // Innings 2 Row
             TeamScoreLine(
                 teamName = snapshot.innings2.battingTeam,
+                photoBase64 = teamPhotosMap[snapshot.innings2.battingTeam.trim().lowercase()].orEmpty(),
                 scoreText = if (snapshot.innings2.isStarted) {
                     "${snapshot.innings2.totalRuns}/${snapshot.innings2.wickets} (${snapshot.innings2.oversDisplay})"
                 } else "Yet to bat",
@@ -294,6 +309,22 @@ private fun MatchHistoryCard(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Scorecard")
                 }
+                if (snapshot.isMatchCompleted) {
+                    OutlinedButton(
+                        onClick = onDelete,
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        modifier = Modifier.testTag("delete_completed_match_btn_${snapshot.matchId}")
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteOutline,
+                            contentDescription = "Delete completed match",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
         }
     }
@@ -302,6 +333,7 @@ private fun MatchHistoryCard(
 @Composable
 private fun TeamScoreLine(
     teamName: String,
+    photoBase64: String,
     scoreText: String,
     isWinner: Boolean
 ) {
@@ -315,7 +347,7 @@ private fun TeamScoreLine(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.weight(1f)
         ) {
-            TeamBadgeAvatar(teamName = teamName, size = 32.dp)
+            TeamBadgeAvatar(teamName = teamName, photoBase64 = photoBase64, size = 32.dp)
             Text(
                 text = teamName,
                 style = MaterialTheme.typography.titleSmall.copy(

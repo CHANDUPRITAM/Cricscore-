@@ -185,6 +185,66 @@
           "type": "array",
           "description": "Compact bowling scorecard lines for current innings."
         },
+        "potmSummary": {
+          "type": "string",
+          "description": "Player of the Match summary once completed."
+        },
+        "innings1Meta": {
+          "type": "string",
+          "description": "Pipe-delimited metadata for 1st innings (battingTeam|bowlingTeam|runs|wickets|overs|crr|isStarted|isCompleted)."
+        },
+        "innings2Meta": {
+          "type": "string",
+          "description": "Pipe-delimited metadata for 2nd innings."
+        },
+        "innings1Extras": {
+          "type": "string",
+          "description": "Extras breakdown summary for 1st innings."
+        },
+        "innings2Extras": {
+          "type": "string",
+          "description": "Extras breakdown summary for 2nd innings."
+        },
+        "innings1BattingLines": {
+          "type": "array",
+          "description": "Full batting scorecard lines for 1st innings."
+        },
+        "innings1BowlingLines": {
+          "type": "array",
+          "description": "Full bowling scorecard lines for 1st innings."
+        },
+        "innings1FowLines": {
+          "type": "array",
+          "description": "Fall of wickets chips for 1st innings."
+        },
+        "innings1PartnershipLines": {
+          "type": "array",
+          "description": "Partnership breakdown lines for 1st innings."
+        },
+        "innings2BattingLines": {
+          "type": "array",
+          "description": "Full batting scorecard lines for 2nd innings."
+        },
+        "innings2BowlingLines": {
+          "type": "array",
+          "description": "Full bowling scorecard lines for 2nd innings."
+        },
+        "innings2FowLines": {
+          "type": "array",
+          "description": "Fall of wickets chips for 2nd innings."
+        },
+        "innings2PartnershipLines": {
+          "type": "array",
+          "description": "Partnership breakdown lines for 2nd innings."
+        },
+        "hostTeamPhoto": {
+          "type": "string",
+          "description": "Compact JPEG Base64 team avatar for the host team."
+        },
+        "visitorTeamPhoto": {
+          "type": "string",
+          "description": "Compact JPEG Base64 team avatar for the visitor team."
+        },
         "ballSequence": {
           "type": "integer",
           "description": "Monotonically increasing sequence counter for instant spectator animation."
@@ -242,6 +302,130 @@
         "updatedAt"
       ]
     },
+    "AvatarProfile": {
+      "title": "AvatarProfile",
+      "description": "Compressed JPEG Base64 profile photo for a team or player owned by an Admin, stored directly in Firestore without external storage.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning admin."
+        },
+        "entityType": {
+          "type": "string",
+          "enum": ["TEAM", "PLAYER"],
+          "description": "Whether this photo belongs to a team or player."
+        },
+        "entityName": {
+          "type": "string",
+          "description": "Display name of the team or player."
+        },
+        "teamName": {
+          "type": "string",
+          "description": "Team name associated with the player (empty for TEAM)."
+        },
+        "photoBase64": {
+          "type": "string",
+          "description": "Compressed square JPEG image encoded as compact Base64 (<= 32000 chars)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last photo update."
+        }
+      },
+      "required": ["ownerUid", "entityType", "entityName", "photoBase64", "updatedAt"]
+    },
+    "SavedTeam": {
+      "title": "SavedTeam",
+      "description": "Admin-saved cricket team with name, short code, optional photo, and squad player entries persisted per authenticated admin.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning admin."
+        },
+        "teamName": {
+          "type": "string",
+          "description": "Saved team display name."
+        },
+        "shortCode": {
+          "type": "string",
+          "description": "Short 2-4 character team code."
+        },
+        "photoBase64": {
+          "type": "string",
+          "description": "Compressed team logo/photo encoded as Base64."
+        },
+        "playerEntries": {
+          "type": "array",
+          "description": "Saved squad player entries formatted as name|role."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest team update."
+        }
+      },
+      "required": ["ownerUid", "teamName", "updatedAt"]
+    },
+    "PlayerCareer": {
+      "title": "PlayerCareer",
+      "description": "Synced player career record scoped under a live match so spectators can tap any player name to view their complete career profile.",
+      "type": "object",
+      "properties": {
+        "adminId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owning match admin."
+        },
+        "shareCode": {
+          "type": "string",
+          "description": "Parent live match share code."
+        },
+        "playerName": {
+          "type": "string",
+          "description": "Player display name."
+        },
+        "teamName": {
+          "type": "string",
+          "description": "Player's team name."
+        },
+        "role": {
+          "type": "string",
+          "description": "Playing role (e.g. Batsman, Bowler, All-Rounder, Wicket-Keeper)."
+        },
+        "photoBase64": {
+          "type": "string",
+          "description": "Compressed square JPEG Base64 player avatar."
+        },
+        "matchesPlayed": {
+          "type": "integer",
+          "description": "Total career matches played."
+        },
+        "battingStatsLine": {
+          "type": "string",
+          "description": "Pipe-delimited career batting totals."
+        },
+        "bowlingStatsLine": {
+          "type": "string",
+          "description": "Pipe-delimited career bowling totals."
+        },
+        "recentPerformancesLines": {
+          "type": "array",
+          "description": "Encoded match-by-match career performance lines."
+        },
+        "careerShotLines": {
+          "type": "array",
+          "description": "Encoded career Wagon Wheel shot lines."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest career sync."
+        }
+      },
+      "required": ["adminId", "shareCode", "playerName", "matchesPlayed", "updatedAt"]
+    },
     "AdminRecord": {
       "title": "AdminRecord",
       "description": "Server-managed super-admin membership marker (no client writes).",
@@ -260,9 +444,21 @@
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "Private profile document per authenticated Cricscore user."
     },
+    "/users/{userId}/avatars/{avatarId}": {
+      "schema": { "$ref": "#/entities/AvatarProfile" },
+      "description": "Compressed team and player profile photos owned by the admin."
+    },
+    "/users/{userId}/saved_teams/{teamId}": {
+      "schema": { "$ref": "#/entities/SavedTeam" },
+      "description": "Admin-saved teams with name, photo, and squad player lists."
+    },
     "/live_matches/{shareCode}": {
       "schema": { "$ref": "#/entities/LiveMatch" },
       "description": "Real-time shared live scoreboard documents keyed by shareCode."
+    },
+    "/live_matches/{shareCode}/player_careers/{playerKey}": {
+      "schema": { "$ref": "#/entities/PlayerCareer" },
+      "description": "Player career profiles synced per live broadcast for instant spectator lookup."
     },
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminRecord" },

@@ -10,6 +10,10 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.GetCredentialProviderConfigurationException
+import androidx.credentials.exceptions.GetCredentialUnsupportedException
+import androidx.credentials.exceptions.NoCredentialException
 import com.example.R
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -33,6 +37,12 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
 private const val AUTH_TAG = "Auth"
+
+data class SignUpOutcome(
+    val user: FirebaseUser,
+    val verificationEmailSent: Boolean,
+    val verificationWarning: String? = null
+)
 
 fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
@@ -66,6 +76,10 @@ private fun friendlyAuthError(e: Exception): String {
                 "Too many attempts. Please wait a moment and try again."
             "ERROR_NETWORK_REQUEST_FAILED" ->
                 "No internet connection. Please check your network and try again."
+            "ERROR_USER_DISABLED" ->
+                "This Admin account has been disabled."
+            "ERROR_ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL" ->
+                "An account already exists with this email using another sign-in method."
             else -> e.localizedMessage ?: "Authentication failed (${e.errorCode})."
         }
     }
@@ -90,7 +104,13 @@ suspend fun signInAdminWithEmail(
         val result = Firebase.auth.signInWithEmailAndPassword(cleanEmail, password).await()
         val user = result.user
             ?: return Result.failure(IllegalStateException("Signed in, but user session was empty."))
-        Result.success(user)
+        runCatching {
+            user.reload().await()
+            if (user.isEmailVerified) {
+                user.getIdToken(true).await()
+            }
+        }
+        Result.success(Firebase.auth.currentUser ?: user)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -100,14 +120,15 @@ suspend fun signInAdminWithEmail(
 }
 
 /**
- * Create a new Admin Account (Sign Up) using Email & Password and save displayName.
+ * Create a new Admin Account (Sign Up) using Email & Password, save displayName,
+ * and trigger Firebase sendEmailVerification().
  */
 suspend fun signUpAdminWithEmail(
     fullName: String,
     email: String,
     password: String,
     confirmPassword: String
-): Result<FirebaseUser> {
+): Result<SignUpOutcome> {
     val cleanName = fullName.trim()
     val cleanEmail = email.trim()
     if (cleanName.length < 2) {
@@ -131,16 +152,105 @@ suspend fun signUpAdminWithEmail(
                 displayName = cleanName.take(80)
             }
             user.updateProfile(profileUpdates).await()
-            user.reload().await()
         } catch (profileErr: Exception) {
             Log.w(AUTH_TAG, "Profile displayName update warning: ${profileErr.message}")
         }
-        Result.success(Firebase.auth.currentUser ?: user)
+
+        var verificationSent = false
+        var verificationWarning: String? = null
+        try {
+            user.sendEmailVerification().await()
+            verificationSent = true
+        } catch (verifyErr: Exception) {
+            Log.w(AUTH_TAG, "sendEmailVerification warning: ${verifyErr.message}", verifyErr)
+            verificationWarning = friendlyAuthError(verifyErr)
+        }
+
+        runCatching { user.reload().await() }
+        Result.success(
+            SignUpOutcome(
+                user = Firebase.auth.currentUser ?: user,
+                verificationEmailSent = verificationSent,
+                verificationWarning = verificationWarning
+            )
+        )
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         Log.e(AUTH_TAG, "Email/Password sign-up failed", e)
         Result.failure(IllegalStateException(friendlyAuthError(e), e))
+    }
+}
+
+/**
+ * Send (or resend) Firebase email verification link to the signed-in Admin.
+ */
+suspend fun sendAdminVerificationEmail(): Result<Unit> {
+    val user = Firebase.auth.currentUser
+        ?: return Result.failure(IllegalStateException("Please sign in first."))
+    return try {
+        user.reload().await()
+        val refreshed = Firebase.auth.currentUser ?: user
+        if (refreshed.isEmailVerified) {
+            refreshed.getIdToken(true).await()
+            return Result.success(Unit)
+        }
+        refreshed.sendEmailVerification().await()
+        Result.success(Unit)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.e(AUTH_TAG, "sendEmailVerification failed", e)
+        Result.failure(IllegalStateException(friendlyAuthError(e), e))
+    }
+}
+
+/**
+ * Reload current user from Firebase and force-refresh the JWT when verified so
+ * Firestore security rules immediately observe `request.auth.token.email_verified == true`.
+ */
+suspend fun refreshAdminVerificationStatus(): Result<Boolean> {
+    val user = Firebase.auth.currentUser
+        ?: return Result.failure(IllegalStateException("Not signed in."))
+    return try {
+        user.reload().await()
+        val refreshed = Firebase.auth.currentUser ?: user
+        if (refreshed.isEmailVerified) {
+            refreshed.getIdToken(true).await()
+            Result.success(true)
+        } else {
+            Result.success(false)
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.e(AUTH_TAG, "Verification status refresh failed", e)
+        Result.failure(IllegalStateException(friendlyAuthError(e), e))
+    }
+}
+
+/**
+ * Send a secure password reset email via Firebase sendPasswordResetEmail().
+ * Uses neutral messaging on unknown accounts to prevent email enumeration.
+ */
+suspend fun sendAdminPasswordResetEmail(email: String): Result<Unit> {
+    val cleanEmail = email.trim()
+    if (cleanEmail.isEmpty() || !Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
+        return Result.failure(IllegalArgumentException("Please enter a valid email address."))
+    }
+    return try {
+        Firebase.auth.sendPasswordResetEmail(cleanEmail).await()
+        Result.success(Unit)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (e is FirebaseAuthException && e.errorCode == "ERROR_USER_NOT_FOUND") {
+            // Do not leak whether an email is registered
+            Result.success(Unit)
+        } else {
+            Log.e(AUTH_TAG, "Password reset email failed", e)
+            Result.failure(IllegalStateException(friendlyAuthError(e), e))
+        }
     }
 }
 
@@ -159,8 +269,12 @@ fun attemptAutoSignIn(
         return
     }
     val clientId = try {
-        context.getString(R.string.default_web_client_id)
+        context.getString(R.string.default_web_client_id).trim()
     } catch (_: Exception) {
+        onUnauthenticated()
+        return
+    }
+    if (clientId.isBlank() || clientId == "placeholder_client_id") {
         onUnauthenticated()
         return
     }
@@ -182,11 +296,17 @@ fun attemptAutoSignIn(
             val credential = credentialManager.getCredential(activity, request).credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                if (idToken.isBlank()) {
+                    onUnauthenticated()
+                    return@launch
+                }
                 Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
                 onAuthSuccess()
             } else {
                 onUnauthenticated()
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             onUnauthenticated()
         }
@@ -205,9 +325,13 @@ fun onGoogleSignInClicked(
     onAuthCancelled: () -> Unit = {}
 ) {
     val clientId = try {
-        context.getString(R.string.default_web_client_id)
+        context.getString(R.string.default_web_client_id).trim()
     } catch (_: Exception) {
-        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+        onAuthError("Google Sign-In configuration missing: default_web_client_id not found.")
+        return
+    }
+    if (clientId.isBlank() || clientId == "placeholder_client_id" || !clientId.endsWith(".apps.googleusercontent.com")) {
+        onAuthError("Google Sign-In is not configured for this build (missing valid Web Client ID).")
         return
     }
     val activity = context.findActivity()
@@ -224,18 +348,41 @@ fun onGoogleSignInClicked(
         try {
             val credential = credentialManager.getCredential(activity, request).credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+                val googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
+                val idToken = googleCredential.idToken
+                if (idToken.isBlank()) {
+                    onAuthError("Google Sign-In returned an empty ID token. Please try again.")
+                    return@launch
+                }
                 Firebase.auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+                runCatching { Firebase.auth.currentUser?.getIdToken(false)?.await() }
                 onAuthSuccess()
             } else {
-                onAuthError("Unexpected credential type received.")
+                onAuthError("Unexpected credential type received from Google.")
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: GetCredentialCancellationException) {
             Log.w(AUTH_TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
             onAuthCancelled()
+        } catch (e: NoCredentialException) {
+            Log.w(AUTH_TAG, "No Google credentials available on device: ${e.message}", e)
+            onAuthError("No Google account found on this device. Add a Google account in device Settings or sign in with Email.")
+        } catch (e: GetCredentialProviderConfigurationException) {
+            Log.e(AUTH_TAG, "Credential provider configuration error: ${e.message}", e)
+            onAuthError("Google Play Services Credential Manager is not configured properly on this device.")
+        } catch (e: GetCredentialUnsupportedException) {
+            Log.e(AUTH_TAG, "Credential Manager unsupported: ${e.message}", e)
+            onAuthError("Google Sign-In is not supported on this device. Please use Email & Password login.")
+        } catch (e: GetCredentialException) {
+            Log.e(AUTH_TAG, "Credential Manager error: ${e.type} - ${e.message}", e)
+            onAuthError(e.localizedMessage ?: "Google Sign-In could not complete. Please try again.")
+        } catch (e: FirebaseAuthException) {
+            Log.e(AUTH_TAG, "Firebase Google credential exchange failed", e)
+            onAuthError(friendlyAuthError(e))
         } catch (e: Exception) {
             Log.e(AUTH_TAG, "Google Sign-In failed", e)
-            onAuthError(e.localizedMessage ?: "Sign in failed. Please try again.")
+            onAuthError(e.localizedMessage ?: "Google Sign-In failed. Please try again.")
         }
     }
 }
