@@ -1,14 +1,8 @@
 #!/bin/bash
 set -e
 
-# Save current google-services.json safely
-cp app/google-services.json /tmp/google-services.json
-
-# Restore entire app folder (including build.gradle.kts) to working commit 6490c86
+# Restore entire app folder to working commit 6490c86 (which had your google-services.json!)
 git checkout 6490c86 -- app
-
-# Put back the saved google-services.json
-cp /tmp/google-services.json app/google-services.json
 
 if [ ! -f debug.keystore ]; then
   keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
