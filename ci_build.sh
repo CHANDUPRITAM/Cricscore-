@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# Restore exact working source code from commit dc1aa77 (Build #21)
-git checkout dc1aa77 -- app/src
+# Restore 100% working v1.0.20 source code (commit 6490c86)
+git checkout 6490c86 -- app/src
 
-# Remove any leftover Start.io files if present
+# Remove any leftover files
 rm -f app/src/main/java/com/example/StartIoBanner.kt
 
 if [ ! -f debug.keystore ]; then
