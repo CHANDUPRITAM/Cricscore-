@@ -46,6 +46,7 @@ import com.startapp.sdk.adsbase.*
 import com.startapp.sdk.adsbase.adlisteners.AdEventListener
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import java.lang.ref.WeakReference
 import java.net.*
 
 tailrec fun Context.findAct(): Activity? = when (this) {
@@ -58,8 +59,12 @@ object StartIoManager {
     private var initDone = false
     private var cachedAd: StartAppAd? = null
     private var ready = false
+    private var hostRef: WeakReference<Context>? = null
 
     fun ensureInit(ctx: Context) {
+        ctx.findAct()?.let { hostRef = WeakReference(it) } ?: run {
+            if (hostRef?.get() == null) hostRef = WeakReference(ctx.applicationContext)
+        }
         if (!initDone) {
             try {
                 StartAppSDK.init(ctx.applicationContext, "210732074", false)
@@ -72,7 +77,8 @@ object StartIoManager {
 
     fun preload(ctx: Context) {
         try {
-            val ad = StartAppAd(ctx.findAct() ?: ctx.applicationContext)
+            val host = ctx.findAct() ?: hostRef?.get() ?: ctx.applicationContext
+            val ad = StartAppAd(host)
             ready = false
             ad.loadAd(object : AdEventListener {
                 override fun onReceiveAd(p0: Ad) { cachedAd = ad; ready = true }
@@ -81,10 +87,14 @@ object StartIoManager {
         } catch (_: Throwable) {}
     }
 
+    fun showFullAdGlobal() {
+        hostRef?.get()?.let { showFullAdNowOrWhenLoaded(it) }
+    }
+
     fun showFullAdNowOrWhenLoaded(ctx: Context) {
         try {
             ensureInit(ctx)
-            val host = ctx.findAct() ?: ctx.applicationContext
+            val host = ctx.findAct() ?: hostRef?.get() ?: ctx.applicationContext
             val a = cachedAd
             if (a != null && (ready || a.isReady)) {
                 a.showAd(); ready = false; cachedAd = null; preload(host); return
@@ -210,10 +220,10 @@ open(p, "w").write(s)
 for vp in glob.glob("app/src/main/java/**/LiveMatchViewModel.kt", recursive=True):
     vs = open(vp).read()
     for fn in ["startSecondInnings", "beginSecondInnings", "confirmSecondInnings", "startNextInnings"]:
-        if "fun " + fn in vs and "showFullAdNowOrWhenLoaded" not in vs:
+        if "fun " + fn in vs and "showFullAdGlobal" not in vs:
             idx = vs.find("{", vs.find("fun " + fn))
             if idx != -1:
-                vs = vs[:idx+1] + "\n        com.example.StartIoManager.showFullAdNowOrWhenLoaded(appContext)" + vs[idx+1:]
+                vs = vs[:idx+1] + "\n        com.example.StartIoManager.showFullAdGlobal()" + vs[idx+1:]
                 open(vp, "w").write(vs)
 '
 
