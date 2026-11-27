@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.domain.PlayerCareerStats
 import com.example.domain.PlayerMatchPerformance
+import com.example.ui.components.CirclePhotoCropDialog
 import com.example.ui.components.EditableProfileAvatar
 import com.example.ui.components.MadeByFooter
 import com.example.ui.components.ProfilePhotoUtils
@@ -88,24 +90,29 @@ fun PlayerProfileScreen(
     val cricColors = LocalCricketColors.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    var isCompressingPhoto by remember { mutableStateOf(false) }
+    var pendingCropUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null && onUpdatePhoto != null) {
-            scope.launch {
-                isCompressingPhoto = true
-                val compressed = ProfilePhotoUtils.compressGalleryPhotoToBase64(context, uri)
-                isCompressingPhoto = false
-                if (compressed != null) {
-                    onUpdatePhoto(compressed)
+            pendingCropUri = uri
+        }
+    }
+
+    pendingCropUri?.let { cropUri ->
+        CirclePhotoCropDialog(
+            imageUri = cropUri,
+            title = "Crop Profile Photo",
+            onDismiss = { pendingCropUri = null },
+            onCropped = { compressed ->
+                pendingCropUri = null
+                onUpdatePhoto?.invoke(compressed)
+                scope.launch {
                     snackbarHostState.showSnackbar("Profile photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)")
-                } else {
-                    snackbarHostState.showSnackbar("Could not process selected photo")
                 }
             }
-        }
+        )
     }
 
     Scaffold(
@@ -175,7 +182,7 @@ fun PlayerProfileScreen(
                                     EditableProfileAvatar(
                                         label = playerName,
                                         photoBase64 = photoBase64,
-                                        isCompressing = isCompressingPhoto,
+                                        isCompressing = false,
                                         containerColor = Color.White.copy(alpha = 0.2f),
                                         contentColor = Color.White,
                                         size = 64.dp,

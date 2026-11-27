@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -72,6 +73,7 @@ import com.example.data.local.TeamEntity
 import com.example.data.repository.PlayerWithTeam
 import com.example.data.repository.TeamWithPlayers
 import com.example.domain.PlayerCareerStats
+import com.example.ui.components.CirclePhotoCropDialog
 import com.example.ui.components.EditableProfileAvatar
 import com.example.ui.components.PlayerFormDialog
 import com.example.ui.components.ProfilePhotoUtils
@@ -120,8 +122,9 @@ fun TeamsScreen(
     var playerToDelete by remember { mutableStateOf<PlayerWithTeam?>(null) }
 
     var quickPhotoTarget by remember { mutableStateOf<QuickPhotoTarget?>(null) }
-    var compressingTeamId by remember { mutableStateOf<Long?>(null) }
-    var compressingPlayerId by remember { mutableStateOf<Long?>(null) }
+    var pendingQuickCrop by remember { mutableStateOf<Pair<QuickPhotoTarget, Uri>?>(null) }
+    val compressingTeamId: Long? = null
+    val compressingPlayerId: Long? = null
 
     val quickPhotoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -129,34 +132,7 @@ fun TeamsScreen(
         val target = quickPhotoTarget
         quickPhotoTarget = null
         if (uri != null && target != null) {
-            scope.launch {
-                when (target) {
-                    is QuickPhotoTarget.Team -> compressingTeamId = target.team.id
-                    is QuickPhotoTarget.Player -> compressingPlayerId = target.player.id
-                }
-                val compressed = ProfilePhotoUtils.compressGalleryPhotoToBase64(context, uri)
-                compressingTeamId = null
-                compressingPlayerId = null
-
-                if (compressed != null) {
-                    when (target) {
-                        is QuickPhotoTarget.Team -> {
-                            onUpdateTeamPhoto(target.team, compressed)
-                            snackbarHostState.showSnackbar(
-                                "${target.team.name} photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)"
-                            )
-                        }
-                        is QuickPhotoTarget.Player -> {
-                            onUpdatePlayerPhoto(target.player, target.teamName, compressed)
-                            snackbarHostState.showSnackbar(
-                                "${target.player.name} photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)"
-                            )
-                        }
-                    }
-                } else {
-                    snackbarHostState.showSnackbar("Could not process selected photo")
-                }
-            }
+            pendingQuickCrop = target to uri
         }
     }
 
@@ -613,6 +589,37 @@ fun TeamsScreen(
                 }) { Text("Remove") }
             },
             dismissButton = { TextButton(onClick = { playerToDelete = null }) { Text("Cancel") } }
+        )
+    }
+
+    pendingQuickCrop?.let { (target, cropUri) ->
+        val cropTitle = when (target) {
+            is QuickPhotoTarget.Team -> "Crop ${target.team.name} Photo"
+            is QuickPhotoTarget.Player -> "Crop ${target.player.name} Photo"
+        }
+        CirclePhotoCropDialog(
+            imageUri = cropUri,
+            title = cropTitle,
+            onDismiss = { pendingQuickCrop = null },
+            onCropped = { compressed ->
+                pendingQuickCrop = null
+                scope.launch {
+                    when (target) {
+                        is QuickPhotoTarget.Team -> {
+                            onUpdateTeamPhoto(target.team, compressed)
+                            snackbarHostState.showSnackbar(
+                                "${target.team.name} photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)"
+                            )
+                        }
+                        is QuickPhotoTarget.Player -> {
+                            onUpdatePlayerPhoto(target.player, target.teamName, compressed)
+                            snackbarHostState.showSnackbar(
+                                "${target.player.name} photo saved (${ProfilePhotoUtils.estimateKb(compressed)} KB)"
+                            )
+                        }
+                    }
+                }
+            }
         )
     }
 }

@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,19 +41,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.PlayerEntity
 import com.example.data.repository.PlayerWithTeam
-import kotlinx.coroutines.launch
 
 @Composable
 fun ProfilePhotoPickerRow(
@@ -138,29 +136,18 @@ fun TeamFormDialog(
     onDismiss: () -> Unit,
     onConfirm: (name: String, shortCode: String, photoBase64: String) -> Unit
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf(initialName) }
     var code by remember { mutableStateOf(initialCode) }
     var photoBase64 by remember { mutableStateOf(initialPhotoBase64) }
-    var isCompressing by remember { mutableStateOf(false) }
+    var pendingCropUri by remember { mutableStateOf<Uri?>(null) }
     var photoError by remember { mutableStateOf<String?>(null) }
 
     val picker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            scope.launch {
-                isCompressing = true
-                photoError = null
-                val compressed = ProfilePhotoUtils.compressGalleryPhotoToBase64(context, uri)
-                isCompressing = false
-                if (compressed != null) {
-                    photoBase64 = compressed
-                } else {
-                    photoError = "Could not compress selected image."
-                }
-            }
+            photoError = null
+            pendingCropUri = uri
         }
     }
 
@@ -172,7 +159,7 @@ fun TeamFormDialog(
                 ProfilePhotoPickerRow(
                     label = name.ifBlank { "Team" },
                     photoBase64 = photoBase64,
-                    isCompressing = isCompressing,
+                    isCompressing = false,
                     errorText = photoError,
                     onPickClick = {
                         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -207,12 +194,24 @@ fun TeamFormDialog(
         confirmButton = {
             Button(
                 onClick = { if (name.isNotBlank()) onConfirm(name.trim(), code.trim(), photoBase64) },
-                enabled = name.isNotBlank() && !isCompressing,
+                enabled = name.isNotBlank(),
                 modifier = Modifier.testTag("confirm_save_team_btn")
             ) { Text("Save Team") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+
+    pendingCropUri?.let { cropUri ->
+        CirclePhotoCropDialog(
+            imageUri = cropUri,
+            title = "Crop Team Photo",
+            onDismiss = { pendingCropUri = null },
+            onCropped = { compressed ->
+                photoBase64 = compressed
+                pendingCropUri = null
+            }
+        )
+    }
 }
 
 @Composable
@@ -227,12 +226,10 @@ fun PlayerFormDialog(
     onDismiss: () -> Unit,
     onConfirm: (playerName: String, role: String, teamName: String, photoBase64: String) -> Unit
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var playerName by remember { mutableStateOf(initialName) }
     var teamName by remember { mutableStateOf(initialTeamName) }
     var photoBase64 by remember { mutableStateOf(initialPhotoBase64) }
-    var isCompressing by remember { mutableStateOf(false) }
+    var pendingCropUri by remember { mutableStateOf<Uri?>(null) }
     var photoError by remember { mutableStateOf<String?>(null) }
     val roles = listOf("Batter", "Bowler", "All-Rounder", "WK-Batter")
     var selectedRole by remember { mutableStateOf(initialRole) }
@@ -241,17 +238,8 @@ fun PlayerFormDialog(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            scope.launch {
-                isCompressing = true
-                photoError = null
-                val compressed = ProfilePhotoUtils.compressGalleryPhotoToBase64(context, uri)
-                isCompressing = false
-                if (compressed != null) {
-                    photoBase64 = compressed
-                } else {
-                    photoError = "Could not compress selected image."
-                }
-            }
+            photoError = null
+            pendingCropUri = uri
         }
     }
 
@@ -266,7 +254,7 @@ fun PlayerFormDialog(
                 ProfilePhotoPickerRow(
                     label = playerName.ifBlank { "Player" },
                     photoBase64 = photoBase64,
-                    isCompressing = isCompressing,
+                    isCompressing = false,
                     errorText = photoError,
                     onPickClick = {
                         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -335,12 +323,24 @@ fun PlayerFormDialog(
                         onConfirm(playerName.trim(), selectedRole, teamName.trim().ifEmpty { "My Squad" }, photoBase64)
                     }
                 },
-                enabled = playerName.isNotBlank() && !isCompressing,
+                enabled = playerName.isNotBlank(),
                 modifier = Modifier.testTag("confirm_save_player_btn")
             ) { Text("Save Player") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+
+    pendingCropUri?.let { cropUri ->
+        CirclePhotoCropDialog(
+            imageUri = cropUri,
+            title = "Crop Player Photo",
+            onDismiss = { pendingCropUri = null },
+            onCropped = { compressed ->
+                photoBase64 = compressed
+                pendingCropUri = null
+            }
+        )
+    }
 }
 
 @Composable

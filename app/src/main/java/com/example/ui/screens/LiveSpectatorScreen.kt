@@ -110,6 +110,7 @@ import com.example.ui.components.LiveStatusPill
 import com.example.ui.components.MadeByFooter
 import com.example.ui.components.ManhattanChartCard
 import com.example.ui.components.RunBreakdownCard
+import com.example.ui.components.StartIoBannerAd
 import com.example.ui.components.StatTableHeaderRow
 import com.example.ui.components.StatTableValueRow
 import com.example.ui.components.TeamBadgeAvatar
@@ -583,7 +584,8 @@ fun LiveSpectatorScreen(
                 }
             }
 
-            MadeByFooter(includeNavBarPadding = true)
+            MadeByFooter(includeNavBarPadding = false)
+            StartIoBannerAd()
         }
     }
 

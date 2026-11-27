@@ -98,6 +98,8 @@ import com.example.ui.components.BallChipBadge
 import com.example.ui.components.MadeByFooter
 import com.example.ui.components.PlayerFormDialog
 import com.example.ui.components.ShotDirectionPickerDialog
+import com.example.ui.components.StartIoAdManager
+import com.example.ui.components.StartIoBannerAd
 import com.example.ui.components.StatTableHeaderRow
 import com.example.ui.components.StatTableValueRow
 import com.example.ui.components.TeamBadgeAvatar
@@ -166,6 +168,10 @@ fun LiveScoringScreen(
 
     val inn = snap.currentInnings
     val cricColors = LocalCricketColors.current
+
+    LaunchedEffect(snap.matchId) {
+        StartIoAdManager.ensureInitialized(context)
+    }
 
     fun rosterFor(teamName: String): List<String> {
         val teamPlayers = teamsWithPlayers.firstOrNull { it.team.name.equals(teamName, ignoreCase = true) }
@@ -528,8 +534,10 @@ fun LiveScoringScreen(
                         onCustomRuns = { showCustomRunsDialog = true }
                     )
                 } else {
-                    MadeByFooter(includeNavBarPadding = true)
+                    MadeByFooter(includeNavBarPadding = false)
                 }
+
+                StartIoBannerAd()
             }
         }
     }
@@ -633,7 +641,11 @@ fun LiveScoringScreen(
             allSavedPlayers = allSavedPlayers,
             onQuickAddPlayer = viewModel::addSavedPlayer,
             onDismiss = { /* User can undo last ball via menu or start 2nd innings */ },
-            onConfirm = { s, ns, bw -> viewModel.startSecondInnings(s, ns, bw) }
+            onConfirm = { s, ns, bw ->
+                StartIoAdManager.showInningsAdAndPreload(context) {
+                    viewModel.startSecondInnings(s, ns, bw)
+                }
+            }
         )
     }
 

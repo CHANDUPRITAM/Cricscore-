@@ -18,17 +18,17 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 object ProfilePhotoUtils {
-    // 25 KB Base64 limit (~18 KB raw JPEG) keeps Firestore writes instant & well within Spark free plan
+    // <= 18 KB raw JPEG (~24 KB Base64) keeps Firestore avatar & team sync instant
     const val MAX_BASE64_LENGTH = 26_000
-    private const val MAX_RAW_JPEG_BYTES = 18_500
+    private const val MAX_RAW_JPEG_BYTES = 18 * 1024
 
     private val bitmapCache = object : LruCache<String, ImageBitmap>(120) {}
 
-    suspend fun compressGalleryPhotoToBase64(
+    suspend fun loadPreviewBitmap(
         context: Context,
         uri: Uri,
-        targetSizePx: Int = 160
-    ): String? = withContext(Dispatchers.IO) {
+        maxDimPx: Int = 1080
+    ): Bitmap? = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
 
         val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -41,8 +41,7 @@ object ProfilePhotoUtils {
         if (srcW <= 0 || srcH <= 0) return@withContext null
 
         var sampleSize = 1
-        val maxSide = targetSizePx * 2
-        while (srcW / sampleSize > maxSide && srcH / sampleSize > maxSide) {
+        while (srcW / sampleSize > maxDimPx || srcH / sampleSize > maxDimPx) {
             sampleSize *= 2
         }
 
@@ -63,40 +62,101 @@ object ProfilePhotoUtils {
             } ?: ExifInterface.ORIENTATION_NORMAL
         }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
 
-        var workingBitmap: Bitmap? = sampledBitmap
+        val rotated = applyExifOrientation(sampledBitmap, orientation)
+        if (rotated !== sampledBitmap) {
+            sampledBitmap.recycle()
+        }
+        rotated
+    }
+
+    suspend fun cropAndCompressBitmapToBase64(
+        bitmap: Bitmap,
+        viewportSizePx: Float,
+        zoom: Float,
+        panX: Float,
+        panY: Float,
+        targetSizePx: Int = 160
+    ): String? = withContext(Dispatchers.IO) {
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return@withContext null
+
+        val bmpW = bitmap.width.toFloat()
+        val bmpH = bitmap.height.toFloat()
+        val effectiveViewport = if (viewportSizePx > 0f) viewportSizePx else min(bmpW, bmpH)
+        val baseScale = max(effectiveViewport / bmpW, effectiveViewport / bmpH)
+        val totalScale = baseScale * zoom.coerceIn(1f, 4f)
+        val maxPanX = max(0f, (bmpW * totalScale - effectiveViewport) / 2f)
+        val maxPanY = max(0f, (bmpH * totalScale - effectiveViewport) / 2f)
+        val clampedX = panX.coerceIn(-maxPanX, maxPanX)
+        val clampedY = panY.coerceIn(-maxPanY, maxPanY)
+
+        val imgLeft = (effectiveViewport - bmpW * totalScale) / 2f + clampedX
+        val imgTop = (effectiveViewport - bmpH * totalScale) / 2f + clampedY
+
+        val cropLeft = ((0f - imgLeft) / totalScale).roundToInt().coerceIn(0, max(0, bitmap.width - 1))
+        val cropTop = ((0f - imgTop) / totalScale).roundToInt().coerceIn(0, max(0, bitmap.height - 1))
+        val desiredSide = (effectiveViewport / totalScale).roundToInt().coerceAtLeast(1)
+        val cropSide = min(desiredSide, min(bitmap.width - cropLeft, bitmap.height - cropTop)).coerceAtLeast(1)
+
+        var croppedSquare: Bitmap? = null
+        try {
+            croppedSquare = Bitmap.createBitmap(bitmap, cropLeft, cropTop, cropSide, cropSide)
+            compressSquareBitmapToBase64(croppedSquare, targetSizePx)
+        } finally {
+            if (croppedSquare != null && croppedSquare !== bitmap && !croppedSquare.isRecycled) {
+                croppedSquare.recycle()
+            }
+        }
+    }
+
+    suspend fun compressGalleryPhotoToBase64(
+        context: Context,
+        uri: Uri,
+        targetSizePx: Int = 160
+    ): String? = withContext(Dispatchers.IO) {
+        val workingBitmap = loadPreviewBitmap(context, uri, maxDimPx = targetSizePx * 3)
+            ?: return@withContext null
         var croppedBitmap: Bitmap? = null
+        try {
+            val side = min(workingBitmap.width, workingBitmap.height).coerceAtLeast(1)
+            val cropX = ((workingBitmap.width - side) / 2).coerceAtLeast(0)
+            val cropY = ((workingBitmap.height - side) / 2).coerceAtLeast(0)
+            croppedBitmap = if (workingBitmap.width != workingBitmap.height) {
+                Bitmap.createBitmap(workingBitmap, cropX, cropY, side, side)
+            } else {
+                workingBitmap
+            }
+            compressSquareBitmapToBase64(croppedBitmap, targetSizePx)
+        } finally {
+            if (croppedBitmap != null && croppedBitmap !== workingBitmap && !croppedBitmap.isRecycled) {
+                croppedBitmap.recycle()
+            }
+            if (!workingBitmap.isRecycled) {
+                workingBitmap.recycle()
+            }
+        }
+    }
+
+    private fun compressSquareBitmapToBase64(
+        croppedBitmap: Bitmap,
+        targetSizePx: Int = 160
+    ): String? {
         var scaledBitmap: Bitmap? = null
         try {
-            val rotated = applyExifOrientation(sampledBitmap, orientation)
-            if (rotated !== sampledBitmap) {
-                sampledBitmap.recycle()
-                workingBitmap = rotated
-            }
-
-            val current = workingBitmap ?: return@withContext null
-            val side = min(current.width, current.height).coerceAtLeast(1)
-            val cropX = ((current.width - side) / 2).coerceAtLeast(0)
-            val cropY = ((current.height - side) / 2).coerceAtLeast(0)
-            croppedBitmap = if (current.width != current.height) {
-                Bitmap.createBitmap(current, cropX, cropY, side, side)
-            } else {
-                current
-            }
-
-            var dim = min(side, targetSizePx).coerceAtLeast(64)
+            val initialDim = min(targetSizePx, max(targetSizePx, croppedBitmap.width)).coerceAtLeast(64)
+            val candidateDims = listOf(initialDim, 128, 96).distinct()
             var bestBytes: ByteArray? = null
 
-            for (attemptDim in listOf(dim, (dim * 0.8f).roundToInt().coerceAtLeast(64), 96)) {
-                if (scaledBitmap != null && scaledBitmap !== croppedBitmap) {
+            for (attemptDim in candidateDims) {
+                if (scaledBitmap != null && scaledBitmap !== croppedBitmap && !scaledBitmap.isRecycled) {
                     scaledBitmap.recycle()
                 }
-                scaledBitmap = if (croppedBitmap.width > attemptDim) {
+                scaledBitmap = if (croppedBitmap.width != attemptDim || croppedBitmap.height != attemptDim) {
                     Bitmap.createScaledBitmap(croppedBitmap, attemptDim, attemptDim, true)
                 } else {
                     croppedBitmap
                 }
 
-                for (quality in listOf(76, 62, 48, 36)) {
+                for (quality in listOf(84, 74, 62, 48, 36, 26)) {
                     val out = ByteArrayOutputStream()
                     scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
                     val bytes = out.toByteArray()
@@ -104,26 +164,19 @@ object ProfilePhotoUtils {
                     if (bytes.size <= MAX_RAW_JPEG_BYTES) {
                         val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
                         if (encoded.length <= MAX_BASE64_LENGTH) {
-                            return@withContext encoded
+                            return encoded
                         }
                     }
                 }
-                dim = attemptDim
             }
 
-            bestBytes?.let { bytes ->
+            return bestBytes?.let { bytes ->
                 val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                if (encoded.length <= MAX_BASE64_LENGTH) encoded else null
+                if (bytes.size <= MAX_RAW_JPEG_BYTES && encoded.length <= MAX_BASE64_LENGTH) encoded else null
             }
         } finally {
-            if (scaledBitmap != null && scaledBitmap !== croppedBitmap && scaledBitmap !== workingBitmap) {
+            if (scaledBitmap != null && scaledBitmap !== croppedBitmap && !scaledBitmap.isRecycled) {
                 scaledBitmap.recycle()
-            }
-            if (croppedBitmap != null && croppedBitmap !== workingBitmap) {
-                croppedBitmap.recycle()
-            }
-            if (workingBitmap != null && !workingBitmap.isRecycled) {
-                workingBitmap.recycle()
             }
         }
     }
