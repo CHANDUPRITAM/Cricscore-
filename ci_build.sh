@@ -1,15 +1,9 @@
 #!/bin/bash
 set -e
 
-if [ -f app/google-services.json ]; then
-  cp app/google-services.json /tmp/google-services.json
-fi
-
+[ -f app/google-services.json ] && cp app/google-services.json /tmp/gs.json
 git checkout dc1aa77 -- app
-
-if [ -f /tmp/google-services.json ]; then
-  cp /tmp/google-services.json app/google-services.json
-fi
+[ -f /tmp/gs.json ] && cp /tmp/gs.json app/google-services.json
 
 if [ ! -f debug.keystore ]; then
   keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
@@ -18,42 +12,28 @@ fi
 mkdir -p app/src/main/res/values
 cat << 'EOF' > app/src/main/res/values/ci_strings.xml
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="default_web_client_id">placeholder_client_id</string>
-</resources>
+<resources><string name="default_web_client_id">placeholder_client_id</string></resources>
 EOF
 
-# 1. Add Start.io SDK safely
-if ! grep -q "com.startapp:inapp-sdk" app/build.gradle.kts; then
-  sed -i 's/dependencies {/dependencies {\n    implementation("com.startapp:inapp-sdk:5.1.0")/' app/build.gradle.kts
-fi
+grep -q "com.startapp:inapp-sdk" app/build.gradle.kts || sed -i 's/dependencies {/dependencies {\n    implementation("com.startapp:inapp-sdk:5.1.0")/' app/build.gradle.kts
 
-# 2. Register Start.io App ID 210732074 in AndroidManifest.xml
 python3 -c '
 p = "app/src/main/AndroidManifest.xml"
 s = open(p).read()
 if "com.startapp.sdk.APPLICATION_ID" not in s:
     s = s.replace("</application>", "        <meta-data android:name=\"com.startapp.sdk.APPLICATION_ID\" android:value=\"210732074\" />\n    </application>", 1)
-open(p, "w").write(s)
+    open(p, "w").write(s)
 '
 
-# 3. Create Reliable Update Checker + Preloaded Full-Screen Ad + Live Banners
 cat << 'EOF' > app/src/main/java/com/example/StartIoAndUpdateHelper.kt
 package com.example
 
 import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
-import android.content.Intent
+import android.content.*
 import android.net.Uri
 import android.view.ViewGroup
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -62,79 +42,61 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.google.firebase.Firebase
 import com.google.firebase.firestore.firestore
 import com.startapp.sdk.ads.banner.Banner
-import com.startapp.sdk.adsbase.Ad
-import com.startapp.sdk.adsbase.StartAppAd
-import com.startapp.sdk.adsbase.StartAppSDK
+import com.startapp.sdk.adsbase.*
 import com.startapp.sdk.adsbase.adlisteners.AdEventListener
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import java.net.*
 
-tailrec fun Context.findActivity(): Activity? = when (this) {
+tailrec fun Context.findAct(): Activity? = when (this) {
     is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
+    is ContextWrapper -> baseContext.findAct()
     else -> null
 }
 
 object StartIoManager {
-    private var initialized = false
+    private var initDone = false
     private var cachedAd: StartAppAd? = null
-    private var isAdReady = false
+    private var ready = false
 
-    fun ensureInit(context: Context) {
-        if (!initialized) {
+    fun ensureInit(ctx: Context) {
+        if (!initDone) {
             try {
-                StartAppSDK.init(context.applicationContext, "210732074", false)
+                StartAppSDK.init(ctx.applicationContext, "210732074", false)
                 StartAppAd.disableSplash()
-                initialized = true
-                preloadFullAd(context)
+                initDone = true
+                preload(ctx)
             } catch (_: Throwable) {}
         }
     }
 
-    fun preloadFullAd(context: Context) {
+    fun preload(ctx: Context) {
         try {
-            val host = context.findActivity() ?: context.applicationContext
-            val ad = StartAppAd(host)
-            isAdReady = false
+            val ad = StartAppAd(ctx.findAct() ?: ctx.applicationContext)
+            ready = false
             ad.loadAd(object : AdEventListener {
-                override fun onReceiveAd(p0: Ad) {
-                    cachedAd = ad
-                    isAdReady = true
-                }
-                override fun onFailedToReceiveAd(p0: Ad?) {
-                    isAdReady = false
-                }
+                override fun onReceiveAd(p0: Ad) { cachedAd = ad; ready = true }
+                override fun onFailedToReceiveAd(p0: Ad?) { ready = false }
             })
         } catch (_: Throwable) {}
     }
 
-    fun showFullAdNowOrWhenLoaded(context: Context) {
+    fun showFullAdNowOrWhenLoaded(ctx: Context) {
         try {
-            ensureInit(context)
-            val host = context.findActivity() ?: context.applicationContext
-            val readyAd = cachedAd
-            if (readyAd != null && (isAdReady || readyAd.isReady)) {
-                readyAd.showAd()
-                isAdReady = false
-                cachedAd = null
-                preloadFullAd(host)
-                return
+            ensureInit(ctx)
+            val host = ctx.findAct() ?: ctx.applicationContext
+            val a = cachedAd
+            if (a != null && (ready || a.isReady)) {
+                a.showAd(); ready = false; cachedAd = null; preload(host); return
             }
-            val freshAd = StartAppAd(host)
-            val requestedAt = System.currentTimeMillis()
-            freshAd.loadAd(object : AdEventListener {
+            val fresh = StartAppAd(host)
+            val t0 = System.currentTimeMillis()
+            fresh.loadAd(object : AdEventListener {
                 override fun onReceiveAd(p0: Ad) {
-                    if (System.currentTimeMillis() - requestedAt <= 6000L) {
-                        try { freshAd.showAd() } catch (_: Throwable) {}
-                        preloadFullAd(host)
-                    } else {
-                        cachedAd = freshAd
-                        isAdReady = true
-                    }
+                    if (System.currentTimeMillis() - t0 <= 6000L) {
+                        try { fresh.showAd() } catch (_: Throwable) {}
+                        preload(host)
+                    } else { cachedAd = fresh; ready = true }
                 }
                 override fun onFailedToReceiveAd(p0: Ad?) {}
             })
@@ -143,131 +105,119 @@ object StartIoManager {
 }
 
 @Composable
-fun MatchAndInningsFullAdTrigger(matchKey: Any) {
-    val context = LocalContext.current
-    LaunchedEffect(matchKey) {
-        StartIoManager.showFullAdNowOrWhenLoaded(context)
-    }
+fun MatchAndInningsFullAdTrigger(k: Any) {
+    val ctx = LocalContext.current
+    LaunchedEffect(k) { StartIoManager.showFullAdNowOrWhenLoaded(ctx) }
 }
 
 @Composable
-fun StartIoBannerOnly(withNavPadding: Boolean = false) {
-    val context = LocalContext.current
-    var ready by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        StartIoManager.ensureInit(context)
-        delay(800L)
-        ready = true
-    }
-
-    if (ready) {
-        val mod = if (withNavPadding) {
-            Modifier.fillMaxWidth().navigationBarsPadding().height(52.dp)
-        } else {
-            Modifier.fillMaxWidth().height(52.dp)
-        }
-        AndroidView(
-            modifier = mod,
-            factory = { ctx ->
-                Banner(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    )
-                    try { loadAd() } catch (_: Throwable) {}
-                }
+fun StartIoBannerOnly(navPad: Boolean = false) {
+    val ctx = LocalContext.current
+    var show by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { StartIoManager.ensureInit(ctx); delay(800L); show = true }
+    if (show) {
+        val m = if (navPad) Modifier.fillMaxWidth().navigationBarsPadding().height(52.dp) else Modifier.fillMaxWidth().height(52.dp)
+        AndroidView(modifier = m, factory = { c ->
+            Banner(c).apply {
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                try { loadAd() } catch (_: Throwable) {}
             }
-        )
+        })
     }
 }
 
 @Composable
 fun GlobalUpdateChecker() {
-    val context = LocalContext.current
-    var showUpdateDialog by remember { mutableStateOf(false) }
-    var serverVer by remember { mutableStateOf("") }
-    var serverUrl by remember { mutableStateOf("https://github.com") }
+    val ctx = LocalContext.current
+    var showDlg by remember { mutableStateOf(false) }
+    var sVer by remember { mutableStateOf("") }
+    var sUrl by remember { mutableStateOf("https://github.com") }
+    val curVer = remember { try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName?.trim().orEmpty() } catch (_: Exception) { "" } }
 
-    val currentVer = remember {
-        try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName?.trim().orEmpty()
-        } catch (_: Exception) { "" }
-    }
-
-    fun checkVersionMatch(remoteVer: String, remoteUrl: String) {
-        val cleanCur = currentVer.removePrefix("v").removePrefix("V").trim()
-        val cleanRem = remoteVer.removePrefix("v").removePrefix("V").trim()
-        if (cleanRem.isNotEmpty() && cleanCur.isNotEmpty() && cleanRem != cleanCur) {
-            serverVer = remoteVer
-            if (remoteUrl.isNotEmpty()) serverUrl = remoteUrl
-            showUpdateDialog = true
+    fun check(v: String, u: String) {
+        val c1 = curVer.removePrefix("v").removePrefix("V").trim()
+        val c2 = v.removePrefix("v").removePrefix("V").trim()
+        if (c2.isNotEmpty() && c1.isNotEmpty() && c2 != c1) {
+            sVer = v; if (u.isNotEmpty()) sUrl = u; showDlg = true
         }
     }
 
     LaunchedEffect(Unit) {
-        StartIoManager.ensureInit(context)
-
-        // 1. Check Firebase Firestore real-time
+        StartIoManager.ensureInit(ctx)
         try {
-            Firebase.firestore.collection("app_config").document("version_info")
-                .addSnapshotListener { snap, _ ->
-                    if (snap != null && snap.exists()) {
-                        val v = (snap.getString("latestVersion") ?: snap.getString("latestversion") ?: "").trim()
-                        val u = (snap.getString("downloadUrl") ?: snap.getString("downloadurl") ?: "").trim()
-                        checkVersionMatch(v, u)
-                    }
+            Firebase.firestore.collection("app_config").document("version_info").addSnapshotListener { snap, _ ->
+                if (snap != null && snap.exists()) {
+                    check((snap.getString("latestVersion") ?: snap.getString("latestversion") ?: "").trim(),
+                          (snap.getString("downloadUrl") ?: snap.getString("downloadurl") ?: "").trim())
                 }
+            }
         } catch (_: Throwable) {}
-
-        // 2. Also check GitHub Latest Release API as backup
         withContext(Dispatchers.IO) {
             try {
                 val conn = (URL("https://github.com").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
                     setRequestProperty("Accept", "application/vnd.github+json")
                     setRequestProperty("User-Agent", "Cricscore-App")
-                    connectTimeout = 6000
-                    readTimeout = 6000
                 }
                 if (conn.responseCode == 200) {
-                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                    val tag = json.optString("tag_name", "").trim()
-                    val assets = json.optJSONArray("assets")
-                    val apkUrl = if (assets != null && assets.length() > 0) {
-                        assets.getJSONObject(0).optString("browser_download_url", "")
-                    } else {
-                        "https://github.com"
-                    }
-                    withContext(Dispatchers.Main) {
-                        checkVersionMatch(tag, apkUrl)
-                    }
+                    val j = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    val assets = j.optJSONArray("assets")
+                    val url = if (assets != null && assets.length() > 0) assets.getJSONObject(0).optString("browser_download_url", "") else ""
+                    withContext(Dispatchers.Main) { check(j.optString("tag_name", "").trim(), url) }
                 }
             } catch (_: Throwable) {}
         }
     }
 
-    if (showUpdateDialog) {
+    if (showDlg) {
         AlertDialog(
-            onDismissRequest = { showUpdateDialog = false },
+            onDismissRequest = { showDlg = false },
             title = { Text("नया अपडेट उपलब्ध है! 🚀") },
-            text = { Text("ऐप का नया वर्ज़न ($serverVer) आ गया है (आपका वर्ज़न: $currentVer)। नए फीचर्स पाने के लिए अभी अपडेट करें।") },
-            confirmButton = {
-                Button(onClick = {
-                    showUpdateDialog = false
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(serverUrl)))
-                }) { Text("Update Now") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showUpdateDialog = false }) { Text("बाद में") }
-            }
+            text = { Text("नया वर्ज़न ($sVer) आ गया है (आपका वर्ज़न: $curVer)। अभी अपडेट करें।") },
+            confirmButton = { Button(onClick = { showDlg = false; ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(sUrl))) }) { Text("Update Now") } },
+            dismissButton = { TextButton(onClick = { showDlg = false }) { Text("बाद में") } }
         )
     }
 }
 EOF
 
-# 4. Inject GlobalUpdateChecker in AppContent, Banners on Home + Live Screens, and Full Ad on Match & 2nd Innings Start
 python3 -c '
 import glob
+def wrap(src, fn, pre, suf):
+    i = 0
+    while True:
+        p = src.find(fn + "(", i)
+        if p == -1: break
+        d, e = 0, p + len(fn)
+        while e < len(src):
+            if src[e] == "(": d += 1
+            elif src[e] == ")":
+                d -= 1
+                if d == 0: break
+            e += 1
+        rep = pre + src[p:e+1] + suf
+        src = src[:p] + rep + src[e+1:]
+        i = p + len(rep)
+    return src
 
-def wrap_call(src, func_name, prefix, suffix):
+p = "app/src/main/java/com/example/MainActivity.kt"
+s = open(p).read()
+s = s.replace("val auth = Firebase.auth", "com.example.GlobalUpdateChecker()\n    val auth = Firebase.auth", 1)
+s = s.replace("MadeByFooter(", "com.example.StartIoBannerOnly(navPad = false)\n                    MadeByFooter(", 1)
+s = wrap(s, "LiveScoringScreen", "Column(Modifier.fillMaxSize()) { com.example.MatchAndInningsFullAdTrigger(matchId); Box(Modifier.weight(1f)) { ", " }; com.example.StartIoBannerOnly(navPad = true) }")
+s = wrap(s, "LiveSpectatorScreen", "Column(Modifier.fillMaxSize()) { Box(Modifier.weight(1f)) { ", " }; com.example.StartIoBannerOnly(navPad = true) }")
+open(p, "w").write(s)
+
+for vp in glob.glob("app/src/main/java/**/LiveMatchViewModel.kt", recursive=True):
+    vs = open(vp).read()
+    for fn in ["startSecondInnings", "beginSecondInnings", "confirmSecondInnings", "startNextInnings"]:
+        if "fun " + fn in vs and "showFullAdNowOrWhenLoaded" not in vs:
+            idx = vs.find("{", vs.find("fun " + fn))
+            if idx != -1:
+                vs = vs[:idx+1] + "\n        com.example.StartIoManager.showFullAdNowOrWhenLoaded(appContext)" + vs[idx+1:]
+                open(vp, "w").write(vs)
+'
+
+sed -i "s/versionName = \".*\"/versionName = \"v1.0.$RUN_NUM\"/" app/build.gradle.kts
+sed -i "s/versionCode = [0-9]*/versionCode = $RUN_NUM/" app/build.gradle.kts
+gradle assembleDebug
+cp app/build/outputs/apk/debug/app-debug.apk Cricscore.apk
