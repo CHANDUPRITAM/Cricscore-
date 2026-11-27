@@ -37,19 +37,28 @@ if "com.startapp.sdk.APPLICATION_ID" not in s:
 open(p, "w").write(s)
 '
 
-# 3. Create Start.io Banner with explicit 50.dp height & MATCH_PARENT width
-cat << 'EOF' > app/src/main/java/com/example/StartIoHelper.kt
+# 3. Create Update Checker + Reusable Start.io Banner for Home & Live Screens
+cat << 'EOF' > app/src/main/java/com/example/StartIoAndUpdateHelper.kt
 package com.example
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.google.firebase.Firebase
+import com.google.firebase.firestore.firestore
 import com.startapp.sdk.ads.banner.Banner
 import com.startapp.sdk.adsbase.StartAppAd
 import com.startapp.sdk.adsbase.StartAppSDK
@@ -69,19 +78,24 @@ object StartIoManager {
 }
 
 @Composable
-fun SafeStartIoBanner() {
+fun StartIoBannerOnly(withNavPadding: Boolean = false) {
     val context = LocalContext.current
     var ready by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        delay(3200L)
+        delay(1500L)
         StartIoManager.ensureInit(context)
         ready = true
     }
 
     if (ready) {
+        val mod = if (withNavPadding) {
+            Modifier.fillMaxWidth().navigationBarsPadding().height(52.dp)
+        } else {
+            Modifier.fillMaxWidth().height(52.dp)
+        }
         AndroidView(
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = mod,
             factory = { ctx ->
                 Banner(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(
@@ -94,15 +108,100 @@ fun SafeStartIoBanner() {
         )
     }
 }
+
+@Composable
+fun GuaranteedUpdateAndAdBanner() {
+    val context = LocalContext.current
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var serverVer by remember { mutableStateOf("") }
+    var serverUrl by remember { mutableStateOf("https://github.com") }
+
+    val currentVer = remember {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName?.trim().orEmpty()
+        } catch (_: Exception) { "" }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(3200L)
+        StartIoManager.ensureInit(context)
+        try {
+            Firebase.firestore.collection("app_config").document("version_info")
+                .addSnapshotListener { snap, _ ->
+                    if (snap != null && snap.exists()) {
+                        val v = (snap.getString("latestVersion") ?: snap.getString("latestversion") ?: "").trim()
+                        val u = (snap.getString("downloadUrl") ?: snap.getString("downloadurl") ?: "").trim()
+                        val cleanCurrent = currentVer.removePrefix("v").removePrefix("V")
+                        val cleanServer = v.removePrefix("v").removePrefix("V")
+                        if (cleanServer.isNotEmpty() && cleanCurrent.isNotEmpty() && cleanServer != cleanCurrent) {
+                            serverVer = v
+                            if (u.isNotEmpty()) serverUrl = u
+                            showUpdateDialog = true
+                        } else {
+                            showUpdateDialog = false
+                        }
+                    }
+                }
+        } catch (_: Throwable) {}
+    }
+
+    if (showUpdateDialog) {
+        AlertDialog(
+            onDismissRequest = { showUpdateDialog = false },
+            title = { Text("नया अपडेट उपलब्ध है! 🚀") },
+            text = { Text("ऐप का नया वर्ज़न ($serverVer) आ गया है (आपका वर्ज़न: $currentVer)। नए फीचर्स पाने के लिए अभी अपडेट करें।") },
+            confirmButton = {
+                Button(onClick = {
+                    showUpdateDialog = false
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(serverUrl)))
+                }) { Text("Update Now") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUpdateDialog = false }) { Text("बाद में") }
+            }
+        )
+    }
+
+    StartIoBannerOnly(withNavPadding = false)
+}
 EOF
 
-# 4. Place SafeStartIoBanner directly above MadeByFooter inside MainActivity Column
+# 4. Inject banner on Home Page AND wrap LiveScoringScreen + LiveSpectatorScreen with bottom banner
 python3 -c '
+def wrap_call(src, func_name, prefix, suffix):
+    idx = 0
+    while True:
+        pos = src.find(func_name + "(", idx)
+        if pos == -1:
+            break
+        depth = 0
+        end = pos + len(func_name)
+        while end < len(src):
+            if src[end] == "(":
+                depth += 1
+            elif src[end] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            end += 1
+        call_str = src[pos:end+1]
+        rep = prefix + call_str + suffix
+        src = src[:pos] + rep + src[end+1:]
+        idx = pos + len(rep)
+    return src
+
 p = "app/src/main/java/com/example/MainActivity.kt"
 s = open(p).read()
-if "SafeStartIoBanner" not in s and "MadeByFooter(" in s:
-    s = s.replace("MadeByFooter(", "SafeStartIoBanner()\n                    MadeByFooter(", 1)
-    open(p, "w").write(s)
+assert "MadeByFooter(" in s, "MadeByFooter not found in MainActivity.kt"
+s = s.replace("MadeByFooter(", "com.example.GuaranteedUpdateAndAdBanner()\n                    MadeByFooter(", 1)
+
+pre = "Column(modifier = Modifier.fillMaxSize()) { Box(modifier = Modifier.weight(1f)) { "
+suf = " }; com.example.StartIoBannerOnly(withNavPadding = true) }"
+s = wrap_call(s, "LiveScoringScreen", pre, suf)
+s = wrap_call(s, "LiveSpectatorScreen", pre, suf)
+
+open(p, "w").write(s)
+print("Successfully added banners to Home, LiveScoring, and LiveSpectator screens!")
 '
 
 sed -i "s/versionName = \".*\"/versionName = \"v1.0.$RUN_NUM\"/" app/build.gradle.kts
