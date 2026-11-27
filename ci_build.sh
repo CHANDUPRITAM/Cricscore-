@@ -37,11 +37,13 @@ if "com.startapp.sdk.APPLICATION_ID" not in s:
 open(p, "w").write(s)
 '
 
-# 3. Create Update Checker + Reusable Start.io Banner for Home & Live Screens
+# 3. Create Reliable Update Checker + Preloaded Full-Screen Ad + Live Banners
 cat << 'EOF' > app/src/main/java/com/example/StartIoAndUpdateHelper.kt
 package com.example
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.view.ViewGroup
@@ -60,20 +62,91 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.google.firebase.Firebase
 import com.google.firebase.firestore.firestore
 import com.startapp.sdk.ads.banner.Banner
+import com.startapp.sdk.adsbase.Ad
 import com.startapp.sdk.adsbase.StartAppAd
 import com.startapp.sdk.adsbase.StartAppSDK
+import com.startapp.sdk.adsbase.adlisteners.AdEventListener
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
 
 object StartIoManager {
     private var initialized = false
+    private var cachedAd: StartAppAd? = null
+    private var isAdReady = false
+
     fun ensureInit(context: Context) {
         if (!initialized) {
             try {
                 StartAppSDK.init(context.applicationContext, "210732074", false)
                 StartAppAd.disableSplash()
                 initialized = true
+                preloadFullAd(context)
             } catch (_: Throwable) {}
         }
+    }
+
+    fun preloadFullAd(context: Context) {
+        try {
+            val host = context.findActivity() ?: context.applicationContext
+            val ad = StartAppAd(host)
+            isAdReady = false
+            ad.loadAd(object : AdEventListener {
+                override fun onReceiveAd(p0: Ad) {
+                    cachedAd = ad
+                    isAdReady = true
+                }
+                override fun onFailedToReceiveAd(p0: Ad?) {
+                    isAdReady = false
+                }
+            })
+        } catch (_: Throwable) {}
+    }
+
+    fun showFullAdNowOrWhenLoaded(context: Context) {
+        try {
+            ensureInit(context)
+            val host = context.findActivity() ?: context.applicationContext
+            val readyAd = cachedAd
+            if (readyAd != null && (isAdReady || readyAd.isReady)) {
+                readyAd.showAd()
+                isAdReady = false
+                cachedAd = null
+                preloadFullAd(host)
+                return
+            }
+            val freshAd = StartAppAd(host)
+            val requestedAt = System.currentTimeMillis()
+            freshAd.loadAd(object : AdEventListener {
+                override fun onReceiveAd(p0: Ad) {
+                    if (System.currentTimeMillis() - requestedAt <= 6000L) {
+                        try { freshAd.showAd() } catch (_: Throwable) {}
+                        preloadFullAd(host)
+                    } else {
+                        cachedAd = freshAd
+                        isAdReady = true
+                    }
+                }
+                override fun onFailedToReceiveAd(p0: Ad?) {}
+            })
+        } catch (_: Throwable) {}
+    }
+}
+
+@Composable
+fun MatchAndInningsFullAdTrigger(matchKey: Any) {
+    val context = LocalContext.current
+    LaunchedEffect(matchKey) {
+        StartIoManager.showFullAdNowOrWhenLoaded(context)
     }
 }
 
@@ -83,8 +156,8 @@ fun StartIoBannerOnly(withNavPadding: Boolean = false) {
     var ready by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        delay(1500L)
         StartIoManager.ensureInit(context)
+        delay(800L)
         ready = true
     }
 
@@ -110,7 +183,7 @@ fun StartIoBannerOnly(withNavPadding: Boolean = false) {
 }
 
 @Composable
-fun GuaranteedUpdateAndAdBanner() {
+fun GlobalUpdateChecker() {
     val context = LocalContext.current
     var showUpdateDialog by remember { mutableStateOf(false) }
     var serverVer by remember { mutableStateOf("") }
@@ -122,27 +195,56 @@ fun GuaranteedUpdateAndAdBanner() {
         } catch (_: Exception) { "" }
     }
 
+    fun checkVersionMatch(remoteVer: String, remoteUrl: String) {
+        val cleanCur = currentVer.removePrefix("v").removePrefix("V").trim()
+        val cleanRem = remoteVer.removePrefix("v").removePrefix("V").trim()
+        if (cleanRem.isNotEmpty() && cleanCur.isNotEmpty() && cleanRem != cleanCur) {
+            serverVer = remoteVer
+            if (remoteUrl.isNotEmpty()) serverUrl = remoteUrl
+            showUpdateDialog = true
+        }
+    }
+
     LaunchedEffect(Unit) {
-        delay(3200L)
         StartIoManager.ensureInit(context)
+
+        // 1. Check Firebase Firestore real-time
         try {
             Firebase.firestore.collection("app_config").document("version_info")
                 .addSnapshotListener { snap, _ ->
                     if (snap != null && snap.exists()) {
                         val v = (snap.getString("latestVersion") ?: snap.getString("latestversion") ?: "").trim()
                         val u = (snap.getString("downloadUrl") ?: snap.getString("downloadurl") ?: "").trim()
-                        val cleanCurrent = currentVer.removePrefix("v").removePrefix("V")
-                        val cleanServer = v.removePrefix("v").removePrefix("V")
-                        if (cleanServer.isNotEmpty() && cleanCurrent.isNotEmpty() && cleanServer != cleanCurrent) {
-                            serverVer = v
-                            if (u.isNotEmpty()) serverUrl = u
-                            showUpdateDialog = true
-                        } else {
-                            showUpdateDialog = false
-                        }
+                        checkVersionMatch(v, u)
                     }
                 }
         } catch (_: Throwable) {}
+
+        // 2. Also check GitHub Latest Release API as backup
+        withContext(Dispatchers.IO) {
+            try {
+                val conn = (URL("https://github.com").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    setRequestProperty("Accept", "application/vnd.github+json")
+                    setRequestProperty("User-Agent", "Cricscore-App")
+                    connectTimeout = 6000
+                    readTimeout = 6000
+                }
+                if (conn.responseCode == 200) {
+                    val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    val tag = json.optString("tag_name", "").trim()
+                    val assets = json.optJSONArray("assets")
+                    val apkUrl = if (assets != null && assets.length() > 0) {
+                        assets.getJSONObject(0).optString("browser_download_url", "")
+                    } else {
+                        "https://github.com"
+                    }
+                    withContext(Dispatchers.Main) {
+                        checkVersionMatch(tag, apkUrl)
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
     }
 
     if (showUpdateDialog) {
@@ -161,50 +263,11 @@ fun GuaranteedUpdateAndAdBanner() {
             }
         )
     }
-
-    StartIoBannerOnly(withNavPadding = false)
 }
 EOF
 
-# 4. Inject banner on Home Page AND wrap LiveScoringScreen + LiveSpectatorScreen with bottom banner
+# 4. Inject GlobalUpdateChecker in AppContent, Banners on Home + Live Screens, and Full Ad on Match & 2nd Innings Start
 python3 -c '
+import glob
+
 def wrap_call(src, func_name, prefix, suffix):
-    idx = 0
-    while True:
-        pos = src.find(func_name + "(", idx)
-        if pos == -1:
-            break
-        depth = 0
-        end = pos + len(func_name)
-        while end < len(src):
-            if src[end] == "(":
-                depth += 1
-            elif src[end] == ")":
-                depth -= 1
-                if depth == 0:
-                    break
-            end += 1
-        call_str = src[pos:end+1]
-        rep = prefix + call_str + suffix
-        src = src[:pos] + rep + src[end+1:]
-        idx = pos + len(rep)
-    return src
-
-p = "app/src/main/java/com/example/MainActivity.kt"
-s = open(p).read()
-assert "MadeByFooter(" in s, "MadeByFooter not found in MainActivity.kt"
-s = s.replace("MadeByFooter(", "com.example.GuaranteedUpdateAndAdBanner()\n                    MadeByFooter(", 1)
-
-pre = "Column(modifier = Modifier.fillMaxSize()) { Box(modifier = Modifier.weight(1f)) { "
-suf = " }; com.example.StartIoBannerOnly(withNavPadding = true) }"
-s = wrap_call(s, "LiveScoringScreen", pre, suf)
-s = wrap_call(s, "LiveSpectatorScreen", pre, suf)
-
-open(p, "w").write(s)
-print("Successfully added banners to Home, LiveScoring, and LiveSpectator screens!")
-'
-
-sed -i "s/versionName = \".*\"/versionName = \"v1.0.$RUN_NUM\"/" app/build.gradle.kts
-sed -i "s/versionCode = [0-9]*/versionCode = $RUN_NUM/" app/build.gradle.kts
-gradle assembleDebug
-cp app/build/outputs/apk/debug/app-debug.apk Cricscore.apk
