@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cricscore - Complete Setup & Rebranding Documentation</title>
+<style>
+  body { font-family: Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 20px auto; padding: 20px; color: #222; background: #f9f9fb; }
+  h1 { color: #0b6e4f; border-bottom: 2px solid #0b6e4f; padding-bottom: 8px; }
+  h2 { color: #1b4965; margin-top: 28px; }
+  code, pre { background: #eef2f5; padding: 4px 8px; border-radius: 4px; font-family: Consolas, monospace; }
+  pre { padding: 12px; overflow-x: auto; border-left: 4px solid #0b6e4f; }
+  .box { background: #fff; padding: 18px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 18px; }
+</style>
+</head>
+<body>
+
+<h1>Cricscore - Android App Setup &amp; Rebranding Guide</h1>
+<p>Thank you for purchasing <strong>Cricscore</strong>. Follow this complete step-by-step guide to configure Firebase, rebrand the app (Package ID, Name, Colors, Icon, Splash Screen), and generate a Signed Release APK/AAB.</p>
+
+<div class="box">
+<h2>1. Opening the Project in Android Studio</h2>
+<ol>
+  <li>Extract the downloaded ZIP archive to a folder on your computer.</li>
+  <li>Open <strong>Android Studio (Ladybug / Meerkat or newer)</strong> with <strong>JDK 21</strong>.</li>
+  <li>Click <strong>File &rarr; Open</strong> and select the extracted project root folder.</li>
+  <li>Wait for Gradle sync to complete.</li>
+</ol>
+</div>
+
+<div class="box">
+<h2>2. Changing the Android Package ID (Application ID)</h2>
+<ol>
+  <li>Open <code>app/build.gradle.kts</code>.</li>
+  <li>Locate <code>namespace</code> and <code>applicationId</code> inside the <code>android { ... }</code> block:
+<pre>android {
+    namespace = "com.yourcompany.cricscore"
+    defaultConfig {
+        applicationId = "com.yourcompany.cricscore"
+        ...
+    }
+}</pre>
+  </li>
+  <li>Replace the existing ID with your own unique package name and click <strong>Sync Now</strong>.</li>
+</ol>
+</div>
+
+<div class="box">
+<h2>3. Rebranding: App Name, Strings, Colors, Assets &amp; Splash Screen</h2>
+<ul>
+  <li><strong>App Name &amp; Strings:</strong> Open <code>app/src/main/res/values/strings.xml</code> and change <code>&lt;string name="app_name"&gt;Cricscore&lt;/string&gt;</code> along with any custom labels.</li>
+  <li><strong>Theme Colors:</strong> Open <code>app/src/main/java/com/example/ui/theme/Color.kt</code> and <code>Theme.kt</code> to customize primary, secondary, and background colors across the entire Jetpack Compose UI.</li>
+  <li><strong>App Icon:</strong> Right-click the <code>app/src/main/res</code> folder in Android Studio &rarr; <strong>New &rarr; Image Asset</strong> &rarr; select <em>Launcher Icons (Adaptive and Legacy)</em>, upload your 512x512 logo, and click <strong>Finish</strong>.</li>
+  <li><strong>Splash Screen &amp; Assets:</strong> Replace custom graphics inside <code>app/src/main/res/drawable/</code> and edit the splash composable in <code>MainActivity.kt</code> (search for <code>Splash</code>) to update the splash logo, title, or duration.</li>
+</ul>
+</div>
+
+<div class="box">
+<h2>4. Firebase Configuration (Authentication &amp; Cloud Firestore)</h2>
+<ol>
+  <li>Go to <a href="https://google.com">Firebase Console</a> and create a new project.</li>
+  <li>Click <strong>Add App &rarr; Android</strong>, enter your exact <code>applicationId</code> from Step 2, and register the app.</li>
+  <li>Download the generated <code>google-services.json</code> file and place it inside the <code>app/</code> directory (replacing the placeholder file).</li>
+  <li>In Firebase Console &rarr; <strong>Authentication &rarr; Sign-in method</strong>, enable <strong>Email/Password</strong> and <strong>Google</strong>.</li>
+  <li>Copy your Web Client ID from Firebase Authentication (Google provider settings) and paste it into <code>app/src/main/res/values/strings.xml</code> (or <code>ci_strings.xml</code>) under <code>default_web_client_id</code>.</li>
+  <li>In Firebase Console &rarr; <strong>Cloud Firestore &rarr; Rules</strong>, paste the rules from the included <code>firestore.rules</code> file and click <strong>Publish</strong>.</li>
+</ol>
+</div>
+
+<div class="box">
+<h2>5. Updating In-App Update URL &amp; Start.io Ad ID</h2>
+<ul>
+  <li><strong>In-App Update Link:</strong> In your Firestore database, create collection <code>app_config</code> &rarr; document <code>version_info</code> with string fields <code>latestVersion</code> (e.g., <code>v1.0.1</code>) and <code>downloadUrl</code> (your own APK or Play Store URL).</li>
+  <li><strong>Start.io Ads (Optional):</strong> Open <code>app/src/main/AndroidManifest.xml</code> and replace <code>YOUR_STARTIO_APP_ID</code> with your own Start.io App ID.</li>
+</ul>
+</div>
+
+<div class="box">
+<h2>6. Generating a Signed Release APK / AAB</h2>
+<ol>
+  <li>In Android Studio top menu, click <strong>Build &rarr; Generate Signed Bundle / APK...</strong></li>
+  <li>Select <strong>Android App Bundle (AAB)</strong> (for Google Play Store) or <strong>APK</strong> and click <strong>Next</strong>.</li>
+  <li>Click <strong>Create new...</strong> to generate a new <code>.jks</code> keystore file, fill in your keystore password, key alias, and validity, and save it safely.</li>
+  <li>Select <strong>release</strong> build variant and click <strong>Create</strong>. Your signed file will be generated in <code>app/release/</code>.</li>
+</ol>
+</div>
+
+</body>
+</html>
